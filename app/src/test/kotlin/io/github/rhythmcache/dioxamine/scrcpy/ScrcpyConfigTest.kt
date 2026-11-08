@@ -99,4 +99,39 @@ class ScrcpyConfigTest {
         assertTrue(args.contains("video=false"))
         assertFalse(args.contains("turn_screen_off=true"))
     }
+
+    @Test
+    fun testCrop_addedToServerArgsForDisplaySource() {
+        val config = ScrcpyConfig(crop = "1280:720:0:0")
+        assertTrue(config.toServerArgs().contains("crop=1280:720:0:0"))
+        assertTrue(config.validate(apiLevel = 34).isEmpty())
+    }
+
+    @Test
+    fun testCrop_notSentWhenEmptyOrInvalid() {
+        assertFalse(ScrcpyConfig().toServerArgs().contains("crop="))
+        assertFalse(ScrcpyConfig(crop = "").toServerArgs().contains("crop="))
+        // an invalid value must never reach the shell command
+        assertFalse(ScrcpyConfig(crop = "1280:720; reboot").toServerArgs().contains("crop="))
+    }
+
+    @Test
+    fun testCrop_invalidFormatFailsValidation() {
+        assertTrue(ScrcpyConfig(crop = "1280:720").validate(apiLevel = 34).isNotEmpty())
+        assertTrue(ScrcpyConfig(crop = "0:720:0:0").validate(apiLevel = 34).isNotEmpty())
+        assertTrue(ScrcpyConfig(crop = "a:b:c:d").validate(apiLevel = 34).isNotEmpty())
+    }
+
+    @Test
+    fun testCrop_notUsedForCameraSource() {
+        val config = ScrcpyConfig(videoSource = "camera", crop = "1280:720:0:0")
+        assertFalse(config.toServerArgs().contains("crop="))
+    }
+
+    @Test
+    fun testCrop_survivesJsonRoundTrip() {
+        val restored = ScrcpyConfig.fromJson(ScrcpyConfig(crop = "960:1080:0:0").toJson())
+        assertEquals("960:1080:0:0", restored.crop)
+        assertNull(ScrcpyConfig.fromJson(ScrcpyConfig().toJson()).crop)
+    }
 }
