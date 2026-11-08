@@ -34,7 +34,8 @@ data class ScrcpyConfig(
     val videoCodec: String = "h264",      // h264, h265, av1, vp8, vp9
     val audioCodec: String = "opus",      // opus, aac, flac, raw
     val audioBitRateKbps: Int = 128,      // 64, 128, 192, 256, 320 Kbps
-    val captureOrientation: String? = null // 0, 90, 180, 270, flip0, flip90, flip180, flip270
+    val captureOrientation: String? = null, // 0, 90, 180, 270, flip0, flip90, flip180, flip270
+    val crop: String? = null // "width:height:x:y" in device pixels, display source only (null = full screen)
 ) {
     /**
      * Validates the configuration parameters, returning a list of configuration warnings
@@ -72,6 +73,10 @@ data class ScrcpyConfig(
             if (apiLevel < 29) {
                 errors.add("Virtual screen mirroring requires at least Android 10 (API 29). Target device is API $apiLevel.")
             }
+        }
+
+        if (videoEnabled && videoSource == "display" && !crop.isNullOrBlank() && !isValidCrop(crop)) {
+            errors.add("Crop must be in the format width:height:x:y using whole numbers (for example 1280:720:0:0).")
         }
 
         return errors
@@ -127,6 +132,7 @@ data class ScrcpyConfig(
                 parts.add("vd_destroy_content=true")
             } else {
                 if (maxSize > 0) parts.add("max_size=$maxSize")
+                crop?.takeIf { isValidCrop(it) }?.let { parts.add("crop=$it") }
             }
 
             if (maxFps > 0) parts.add("max_fps=$maxFps")
@@ -183,10 +189,16 @@ data class ScrcpyConfig(
         json.put("audioCodec", audioCodec)
         json.put("audioBitRateKbps", audioBitRateKbps)
         captureOrientation?.let { json.put("captureOrientation", it) }
+        crop?.let { json.put("crop", it) }
         return json.toString()
     }
 
     companion object {
+        // width:height:x:y, width and height must be at least 1
+        private val CROP_REGEX = Regex("""[1-9]\d*:[1-9]\d*:\d+:\d+""")
+
+        fun isValidCrop(value: String): Boolean = CROP_REGEX.matches(value)
+
         fun fromJson(jsonStr: String): ScrcpyConfig {
             return runCatching {
                 val json = JSONObject(jsonStr)
@@ -219,7 +231,8 @@ data class ScrcpyConfig(
                     videoCodec = json.optString("videoCodec", "h264"),
                     audioCodec = json.optString("audioCodec", "opus"),
                     audioBitRateKbps = json.optInt("audioBitRateKbps", 128),
-                    captureOrientation = json.optString("captureOrientation").takeIf { it.isNotEmpty() && it != "null" }
+                    captureOrientation = json.optString("captureOrientation").takeIf { it.isNotEmpty() && it != "null" },
+                    crop = json.optString("crop").takeIf { it.isNotEmpty() && it != "null" }
                 )
             }.getOrElse { ScrcpyConfig() }
         }
