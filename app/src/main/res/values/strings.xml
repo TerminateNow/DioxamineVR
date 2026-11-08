@@ -258,6 +258,9 @@
     <string name="codec_vp8">VP8</string>
     <string name="codec_vp9">VP9</string>
     <string name="label_orientation">Orientation</string>
+    <string name="label_crop">Crop</string>
+    <string name="crop_hint">Width:Height:X:Y in device pixels, for example 1280:720:0:0. Leave empty for the full screen.</string>
+    <string name="crop_invalid">Use the format width:height:x:y with whole numbers.</string>
     <string name="orient_normal">Normal</string>
     <string name="orient_90">90°</string>
     <string name="orient_180">180°</string>
