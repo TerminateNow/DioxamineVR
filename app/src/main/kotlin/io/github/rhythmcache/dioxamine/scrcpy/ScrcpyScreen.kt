@@ -2068,6 +2068,34 @@ private fun VideoSettings(
             )
         }
     }
+
+    if (config.videoSource == "display") {
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_crop), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        val cropValue = config.crop.orEmpty()
+        val cropInvalid = cropValue.isNotEmpty() && !ScrcpyConfig.isValidCrop(cropValue)
+        OutlinedTextField(
+            value = cropValue,
+            onValueChange = { input ->
+                val cleaned = input.filter { it.isDigit() || it == ':' }
+                onConfigChange(config.copy(crop = cleaned.ifEmpty { null }))
+            },
+            enabled = !isMirroring,
+            singleLine = true,
+            isError = cropInvalid,
+            placeholder = { Text("1280:720:0:0") },
+            supportingText = {
+                Text(
+                    stringResource(if (cropInvalid) R.string.crop_invalid else R.string.crop_hint),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
