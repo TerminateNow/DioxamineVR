@@ -134,4 +134,53 @@ class ScrcpyConfigTest {
         assertEquals("960:1080:0:0", restored.crop)
         assertNull(ScrcpyConfig.fromJson(ScrcpyConfig().toJson()).crop)
     }
+
+    @Test
+    fun testAngle_addedToServerArgsForDisplaySource() {
+        val config = ScrcpyConfig(angle = "-22")
+        assertTrue(config.toServerArgs().contains("angle=-22"))
+        assertTrue(config.validate(apiLevel = 34).isEmpty())
+    }
+
+    @Test
+    fun testAngle_notSentWhenEmptyZeroOrInvalid() {
+        assertFalse(ScrcpyConfig().toServerArgs().contains("angle="))
+        assertFalse(ScrcpyConfig(angle = "0").toServerArgs().contains("angle="))
+        assertFalse(ScrcpyConfig(angle = "-").toServerArgs().contains("angle="))
+        // an invalid value must never reach the shell command
+        assertFalse(ScrcpyConfig(angle = "22; reboot").toServerArgs().contains("angle="))
+        assertFalse(ScrcpyConfig(angle = "400").toServerArgs().contains("angle="))
+    }
+
+    @Test
+    fun testAngle_invalidValueFailsValidation() {
+        assertTrue(ScrcpyConfig(angle = "abc").validate(apiLevel = 34).isNotEmpty())
+        assertTrue(ScrcpyConfig(angle = "361").validate(apiLevel = 34).isNotEmpty())
+        assertTrue(ScrcpyConfig(angle = "12.5").validate(apiLevel = 34).isEmpty())
+    }
+
+    @Test
+    fun testAngle_notUsedForCameraSource() {
+        val config = ScrcpyConfig(videoSource = "camera", angle = "-22")
+        assertFalse(config.toServerArgs().contains("angle="))
+    }
+
+    @Test
+    fun testAngle_stepButtons() {
+        assertEquals("1", ScrcpyConfig.stepAngle(null, 1.0))
+        assertEquals("-1", ScrcpyConfig.stepAngle(null, -1.0))
+        assertEquals("-21", ScrcpyConfig.stepAngle("-22", 1.0))
+        assertEquals("-23", ScrcpyConfig.stepAngle("-22", -1.0))
+        assertEquals("-21.5", ScrcpyConfig.stepAngle("-22.5", 1.0))
+        assertNull(ScrcpyConfig.stepAngle("1", -1.0))
+        assertEquals("1", ScrcpyConfig.stepAngle("-", 1.0))
+        assertEquals("360", ScrcpyConfig.stepAngle("360", 1.0))
+    }
+
+    @Test
+    fun testAngle_survivesJsonRoundTrip() {
+        val restored = ScrcpyConfig.fromJson(ScrcpyConfig(angle = "-22").toJson())
+        assertEquals("-22", restored.angle)
+        assertNull(ScrcpyConfig.fromJson(ScrcpyConfig().toJson()).angle)
+    }
 }
