@@ -2095,6 +2095,54 @@ private fun VideoSettings(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_angle), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        val angleValue = config.angle.orEmpty()
+        val angleInvalid = angleValue.isNotEmpty() && !ScrcpyConfig.isValidAngle(angleValue)
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedButton(
+                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, -1.0))) },
+                enabled = !isMirroring,
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.padding(top = 4.dp).size(48.dp)
+            ) {
+                Text("\u2212", style = MaterialTheme.typography.titleLarge)
+            }
+            OutlinedTextField(
+                value = angleValue,
+                onValueChange = { input ->
+                    val cleaned = input.filter { it.isDigit() || it == '-' || it == '.' }
+                    onConfigChange(config.copy(angle = cleaned.ifEmpty { null }))
+                },
+                enabled = !isMirroring,
+                singleLine = true,
+                isError = angleInvalid,
+                placeholder = { Text("0") },
+                supportingText = {
+                    Text(
+                        stringResource(if (angleInvalid) R.string.angle_invalid else R.string.angle_hint),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, 1.0))) },
+                enabled = !isMirroring,
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.padding(top = 4.dp).size(48.dp)
+            ) {
+                Text("+", style = MaterialTheme.typography.titleLarge)
+            }
+        }
     }
 }
 
