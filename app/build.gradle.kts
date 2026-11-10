@@ -143,6 +143,8 @@ dependencies {
     implementation(libs.qrose)
 
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests (Android's stub throws "not mocked")
+    testImplementation("org.json:json:20240303")
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
