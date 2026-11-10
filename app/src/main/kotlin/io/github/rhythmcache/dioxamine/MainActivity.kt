@@ -10,7 +10,30 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.annotation.StringRes
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -189,11 +212,32 @@ fun DioxamineApp(keyDir: File) {
         derivedStateOf { imeInsets.getBottom(density) > 0 }
     }
     val isFullScreen = isScrcpyFullScreen || isPluginActive
-    val hideBottomBar = isFullScreen || isImeVisible
+    val hideSideRail = isFullScreen
+
+    // Side rail focus state: expanded (icon + label) while D-pad focus is on the rail,
+    // collapsed to icons only while focus is inside the page content.
+    val tabFocusRequesters = remember { Tab.entries.associateWith { FocusRequester() } }
+    var railHasFocus by remember { mutableStateOf(false) }
+    val inputModeManager = LocalInputModeManager.current
+    val usingDpad = inputModeManager.inputMode == InputMode.Keyboard
+
+    // On launch with a remote/D-pad, start with focus on the selected tab so the remote works immediately.
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(150)
+        if (inputModeManager.inputMode == InputMode.Keyboard) {
+            runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
+        }
+    }
 
     // Navigate back to ADB home tab before exiting app
-    BackHandler(enabled = selectedTab != Tab.ADB && !hideBottomBar) {
+    BackHandler(enabled = selectedTab != Tab.ADB && !hideSideRail) {
         selectedTab = Tab.ADB
+    }
+
+    // Remote "Back" from inside a page returns focus to the side rail first.
+    // (Screens' own back handlers, e.g. closing a sub-page, still take priority.)
+    BackHandler(enabled = usingDpad && !railHasFocus && !hideSideRail) {
+        runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
     }
 
     // Exit Scrcpy fullscreen on back gesture
@@ -201,22 +245,7 @@ fun DioxamineApp(keyDir: File) {
         isScrcpyFullScreen = false
     }
 
-    Scaffold(
-        bottomBar = {
-            if (!hideBottomBar) {
-                NavigationBar {
-                    Tab.entries.forEach { tab ->
-                        NavigationBarItem(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
-                            icon = { Icon(tab.icon, contentDescription = stringResource(tab.labelRes)) },
-                            label = { Text(stringResource(tab.labelRes)) }
-                        )
-                    }
-                }
-            }
-        }
-    ) { padding ->
+    Scaffold { padding ->
         val layoutDirection = LocalLayoutDirection.current
         val contentPadding = remember(padding, isImeVisible, layoutDirection) {
             if (isImeVisible) {
@@ -230,7 +259,7 @@ fun DioxamineApp(keyDir: File) {
                 padding
             }
         }
-        Box(
+        Row(
             modifier = if (isFullScreen) {
                 Modifier.fillMaxSize()
             } else {
@@ -240,6 +269,20 @@ fun DioxamineApp(keyDir: File) {
                     .fillMaxSize()
             }
         ) {
+            if (!hideSideRail) {
+                SideTabRail(
+                    selectedTab = selectedTab,
+                    expanded = railHasFocus,
+                    focusRequesters = tabFocusRequesters,
+                    onFocusChanged = { railHasFocus = it },
+                    onSelect = { selectedTab = it }
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
             when (selectedTab) {
                 Tab.ADB -> AdbScreen(vm)
                 Tab.SCRCPY -> ScrcpyScreen(vm, scrcpyVm = scrcpyVm, onFullScreenChange = { isScrcpyFullScreen = it })
@@ -255,6 +298,121 @@ fun DioxamineApp(keyDir: File) {
                 )
                 Tab.SETTINGS -> SettingsScreen(vm)
             }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Left-side tab rail (TV / D-pad friendly)
+// ---------------------------------------------------------------------------
+
+private val RailExpandedWidth = 200.dp
+private val RailCollapsedWidth = 80.dp
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SideTabRail(
+    selectedTab: Tab,
+    expanded: Boolean,
+    focusRequesters: Map<Tab, FocusRequester>,
+    onFocusChanged: (Boolean) -> Unit,
+    onSelect: (Tab) -> Unit,
+) {
+    val width by animateDpAsState(
+        targetValue = if (expanded) RailExpandedWidth else RailCollapsedWidth,
+        label = "railWidth"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(width)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .onFocusChanged { onFocusChanged(it.hasFocus) }
+            // Entering the rail with the D-pad lands on the last focused tab (or the selected one)
+            .focusRestorer(focusRequesters.getValue(selectedTab))
+            .selectableGroup()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Tab.entries.forEach { tab ->
+            SideTabRailItem(
+                tab = tab,
+                selected = tab == selectedTab,
+                expanded = expanded,
+                modifier = Modifier.focusRequester(focusRequesters.getValue(tab)),
+                onClick = { onSelect(tab) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SideTabRailItem(
+    tab: Tab,
+    selected: Boolean,
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val colors = MaterialTheme.colorScheme
+    val label = stringResource(tab.labelRes)
+
+    // Strong, TV-visible focus highlight; a softer pill marks the selected tab.
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            focused -> colors.primary
+            selected -> colors.secondaryContainer
+            else -> Color.Transparent
+        },
+        label = "railItemContainer"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            focused -> colors.onPrimary
+            selected -> colors.onSecondaryContainer
+            else -> colors.onSurfaceVariant
+        },
+        label = "railItemContent"
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(containerColor)
+            .selectable(
+                selected = selected,
+                interactionSource = interactionSource,
+                indication = ripple(),
+                role = Role.Tab,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = tab.icon,
+            contentDescription = label,
+            tint = contentColor,
+            modifier = Modifier.size(24.dp)
+        )
+        if (expanded) {
+            Spacer(Modifier.width(14.dp))
+            Text(
+                text = label,
+                color = contentColor,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip
+            )
         }
     }
 }
