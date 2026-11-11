@@ -78,7 +78,7 @@ import java.io.File
 
 enum class Tab(@StringRes val labelRes: Int, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     ADB(R.string.tab_adb, Icons.Filled.PhoneAndroid),
-    SCRCPY(R.string.tab_scrcpy, Icons.AutoMirrored.Filled.ScreenShare),
+    SCRCPY(R.string.tab_scrcpy, io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.VrHeadset),
     FASTBOOT(R.string.tab_fastboot, Icons.Filled.Bolt),
     PLUGINS(R.string.tab_plugins, Icons.Filled.Extension),
     SETTINGS(R.string.tab_settings, Icons.Filled.Settings)

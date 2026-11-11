@@ -1,5 +1,8 @@
 package io.github.rhythmcache.dioxamine.scrcpy
 
+import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.toggleable
 import io.github.rhythmcache.dioxamine.ui.tv.Button
@@ -427,6 +430,7 @@ fun ScrcpyScreen(
         )
         scrcpyVm.activeSession = session
         scrcpyVm.isMirroring = true
+        ScrcpyStreamStats.reset()
         session.start(holder)
     }
 
@@ -436,6 +440,52 @@ fun ScrcpyScreen(
             session.stopRecording()
         } else {
             session.startRecording()
+        }
+    }
+
+    // ---- Mirrored device volume (media stream) via `cmd media_session volume` ----
+    var remoteVolume by remember { mutableStateOf<Int?>(null) }
+    var remoteVolumeMax by remember { mutableStateOf<Int?>(null) }
+    var pendingRemoteVolume by remember { mutableStateOf<Int?>(null) }
+    val volumeClient = client
+    LaunchedEffect(isMirroring, volumeClient) {
+        remoteVolume = null
+        remoteVolumeMax = null
+        if (isMirroring && volumeClient != null) {
+            val parsed = runCatching {
+                withContext(Dispatchers.IO) {
+                    val r = volumeClient.shell("cmd media_session volume --stream 3 --get")
+                    r.stdoutText + "\n" + r.stderrText
+                }
+            }.getOrNull()?.let { parseMediaSessionVolume(it) }
+            if (parsed != null) {
+                remoteVolume = parsed.first
+                remoteVolumeMax = parsed.second
+            }
+        }
+    }
+    // Debounced so holding Up/Down doesn't flood the device with shell commands.
+    LaunchedEffect(pendingRemoteVolume) {
+        val target = pendingRemoteVolume ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(120)
+        val c = volumeClient ?: return@LaunchedEffect
+        runCatching { withContext(Dispatchers.IO) { c.shell("cmd media_session volume --stream 3 --set $target") } }
+    }
+    fun setRemoteVolume(level: Int) {
+        val max = remoteVolumeMax ?: return
+        val v = level.coerceIn(0, max)
+        remoteVolume = v
+        pendingRemoteVolume = v
+    }
+    fun stepRemoteVolume(delta: Int) {
+        val cur = remoteVolume
+        if (cur != null && remoteVolumeMax != null) {
+            setRemoteVolume(cur + delta)
+        } else {
+            // Absolute volume unavailable: fall back to volume key presses on the device.
+            val key = if (delta > 0) KeyEvent.KEYCODE_VOLUME_UP else KeyEvent.KEYCODE_VOLUME_DOWN
+            activeSession?.sendKeycode(0, key)
+            activeSession?.sendKeycode(1, key)
         }
     }
 
@@ -560,7 +610,11 @@ fun ScrcpyScreen(
                     },
                     onSurfaceDestroyed = {
                         activeSession?.detachSurface()
-                    }
+                    },
+                    remoteVolume = remoteVolume,
+                    remoteVolumeMax = remoteVolumeMax,
+                    onRemoteVolumeStep = { stepRemoteVolume(it) },
+                    onRemoteVolumeSet = { setRemoteVolume(it) }
                 )
             } else {
                 ScrcpyAudioOnlyPlayer(
@@ -644,7 +698,7 @@ fun ScrcpyScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Icon(
-                            if (isMirroring) Icons.Filled.Stop else Icons.AutoMirrored.Filled.ScreenShare,
+                            if (isMirroring) Icons.Filled.Stop else io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.VrHeadset,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )
@@ -2647,7 +2701,11 @@ private fun ScrcpyVideoPlayer(
     onKeyEvent: (action: Int, keyCode: Int) -> Unit,
     onTouchEvent: (action: Int, pointerId: Long, x: Float, y: Float, vw: Int, vh: Int) -> Unit,
     onSurfaceCreated: (SurfaceHolder) -> Unit,
-    onSurfaceDestroyed: () -> Unit = {}
+    onSurfaceDestroyed: () -> Unit = {},
+    remoteVolume: Int? = null,
+    remoteVolumeMax: Int? = null,
+    onRemoteVolumeStep: (Int) -> Unit = {},
+    onRemoteVolumeSet: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -2721,10 +2779,24 @@ private fun ScrcpyVideoPlayer(
     val isImeVisible = WindowInsets.isImeVisible
     var imeBuffer by remember { mutableStateOf(TextFieldValue("  ", selection = TextRange(2))) }
 
-    var controlsExpanded by remember { mutableStateOf(false) }
-    // Remote Back closes the expanded control overlay before anything else.
-    BackHandler(enabled = controlsExpanded) {
-        controlsExpanded = false
+    // Remote-friendly overlay state. Visible at start, hides after 6 s without input.
+    var overlayVisible by remember { mutableStateOf(true) }
+    var overlayActivity by remember { mutableIntStateOf(0) }
+    var volumeAdjusting by remember { mutableStateOf(false) }
+    var statsVisible by rememberSaveable { mutableStateOf(false) }
+    var rootFocused by remember { mutableStateOf(false) }
+    val overlayControlsFocus = remember { FocusRequester() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    fun pressBack() { backDispatcher?.onBackPressed() }
+
+    // Back (or Left at the edge) hides the overlay; while adjusting volume it ends adjusting first.
+    BackHandler(enabled = overlayVisible) {
+        overlayVisible = false
+    }
+    BackHandler(enabled = volumeAdjusting) {
+        volumeAdjusting = false
+        overlayActivity++
     }
     var overlayRectInRoot by remember { mutableStateOf(Rect.Zero) }
     var videoPositionInRoot by remember { mutableStateOf(Offset.Zero) }
@@ -2766,6 +2838,7 @@ private fun ScrcpyVideoPlayer(
     BoxWithConstraints(
         modifier = modifier
             .focusRequester(focusRequester)
+            .onFocusChanged { rootFocused = it.isFocused }
             .focusTarget()
             .onPreviewKeyEvent { keyEvent ->
                 if (bindVolumeKeys && !videoSourceIsCamera) {
@@ -2784,6 +2857,33 @@ private fun ScrcpyVideoPlayer(
                             onKeyEvent(action, keyCode)
                         }
                         return@onPreviewKeyEvent true
+                    }
+                }
+                // While typing to the device, arrows/enter go to the device keyboard.
+                if (showKeyboard && !videoSourceIsCamera) return@onPreviewKeyEvent false
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    overlayActivity++
+                    when (keyEvent.key) {
+                        Key.DirectionLeft -> {
+                            // Left acts as Back unless it can move focus to a control on the left.
+                            when {
+                                volumeAdjusting || !overlayVisible || rootFocused -> pressBack()
+                                !focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Left) -> pressBack()
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp, Key.DirectionDown, Key.DirectionRight,
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            if (!overlayVisible) {
+                                overlayVisible = true
+                                return@onPreviewKeyEvent true
+                            }
+                            if (rootFocused) {
+                                runCatching { overlayControlsFocus.requestFocus() }
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                        else -> {}
                     }
                 }
                 false
@@ -2933,6 +3033,10 @@ private fun ScrcpyVideoPlayer(
                     videoPositionInRoot = it.positionInRoot()
                 }
                 .pointerInteropFilter { event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        overlayVisible = true
+                        overlayActivity++
+                    }
                     if (videoSourceIsCamera) return@pointerInteropFilter false
                     val touchInRoot = Offset(event.x, event.y) + videoPositionInRoot
                     if (showTouchpadOverlay && overlayRectInRoot.contains(touchInRoot)) {
@@ -2962,403 +3066,213 @@ private fun ScrcpyVideoPlayer(
                 }
         )
 
-        // Floating Draggable & Edge-Aware Sticky Controls
-        val density = LocalDensity.current
-        val buttonSizePx = with(density) { 48.dp.toPx() }
-        val paddingPx = with(density) { 12.dp.toPx() }
-        val containerWidthPx = with(density) { maxWidth.toPx() }
-        val containerHeightPx = with(density) { maxHeight.toPx() }
-        val topInsetPx = if (isFullScreen) {
-            with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx() }
-        } else 0f
-
-        val minX = paddingPx
-        val maxX = maxOf(minX, containerWidthPx - buttonSizePx - paddingPx)
-        val minY = topInsetPx + paddingPx
-        val maxY = maxOf(minY, containerHeightPx - buttonSizePx - paddingPx)
-
-        var normX by rememberSaveable { mutableFloatStateOf(1f) }
-        var normY by rememberSaveable { mutableFloatStateOf(0f) }
-
-        val animNormX = remember { Animatable(normX) }
-        val animNormY = remember { Animatable(normY) }
-
-        LaunchedEffect(normX, normY) {
-            if (!animNormX.isRunning && animNormX.targetValue != normX) {
-                animNormX.snapTo(normX)
+        // ---- Remote-friendly overlay ------------------------------------------------------
+        // Right: control buttons stacked vertically. Left: device volume + stream stats toggle.
+        // Any D-pad direction / Select / touch shows it; Back (or Left at the edge) hides it;
+        // it fades out after 6 seconds without input.
+        LaunchedEffect(overlayVisible) {
+            if (overlayVisible) {
+                if (!showKeyboard) {
+                    delay(80)
+                    runCatching { overlayControlsFocus.requestFocus() }
+                }
+            } else {
+                volumeAdjusting = false
+                if (!showKeyboard) runCatching { focusRequester.requestFocus() }
             }
-            if (!animNormY.isRunning && animNormY.targetValue != normY) {
-                animNormY.snapTo(normY)
+        }
+        LaunchedEffect(overlayVisible, overlayActivity) {
+            if (overlayVisible) {
+                delay(6000)
+                overlayVisible = false
             }
         }
 
-        var layoutWidth by remember { mutableIntStateOf(0) }
-        var layoutHeight by remember { mutableIntStateOf(0) }
-
-        val side = remember(animNormX.value, animNormY.value) {
-            val curX = animNormX.value
-            val curY = animNormY.value
-            val distLeft = curX
-            val distRight = 1f - curX
-            val distTop = curY
-            val distBottom = 1f - curY
-            val minDist = minOf(distRight, distLeft, distTop, distBottom)
-            when (minDist) {
-                distRight -> ControlSide.RIGHT
-                distLeft -> ControlSide.LEFT
-                distTop -> ControlSide.TOP
-                else -> ControlSide.BOTTOM
-            }
+        if (statsVisible) {
+            StreamStatsPanel(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+                    .zIndex(12f)
+            )
         }
 
-        val arrowIcon = when (side) {
-            ControlSide.TOP -> if (controlsExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown
-            ControlSide.BOTTOM -> if (controlsExpanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp
-            ControlSide.LEFT -> if (controlsExpanded) Icons.AutoMirrored.Filled.KeyboardArrowLeft else Icons.AutoMirrored.Filled.KeyboardArrowRight
-            ControlSide.RIGHT -> if (controlsExpanded) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.AutoMirrored.Filled.KeyboardArrowLeft
-        }
-
-        val maxItems = if (maxWidth >= 580.dp) 9 else 5
-        val isAlignedEnd = side == ControlSide.RIGHT || (animNormX.value > 0.5f && (side == ControlSide.TOP || side == ControlSide.BOTTOM))
-        val flowArrangement = Arrangement.spacedBy(8.dp, if (isAlignedEnd) Alignment.End else Alignment.Start)
-
-        val actionButtons = @Composable {
-            FlowRow(
-                modifier = Modifier.widthIn(max = (maxWidth - 80.dp).coerceAtLeast(180.dp)),
-                maxItemsInEachRow = maxItems,
-                horizontalArrangement = flowArrangement,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        AnimatedVisibility(
+            visible = overlayVisible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(400)),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .zIndex(10f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(end = 16.dp, top = 16.dp, bottom = 16.dp)
+                    .verticalScroll(rememberScrollState())
+                    .focusRequester(overlayControlsFocus)
+                    .focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (canRecord) {
-                    IconButton(
-                        onClick = onToggleRecord,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (isRecording) Color.Red.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.6f)
-                        )
-                    ) {
-                        Icon(
-                            if (isRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
-                            contentDescription = stringResource(if (isRecording) R.string.scrcpy_recording_stopped else R.string.scrcpy_recording_started),
-                            tint = if (isRecording) Color.White else Color.Red
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { captureScreenshot() },
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        Icons.Filled.PhotoCamera,
-                        contentDescription = stringResource(R.string.cd_take_screenshot),
-                        tint = Color.White
-                    )
-                }
-                if (videoSourceIsCamera) {
-                    IconButton(
-                        onClick = onToggleTorch,
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                    ) {
-                        Icon(
-                            if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
-                            contentDescription = stringResource(R.string.cd_toggle_torch),
-                            tint = if (torchOn) Color.Yellow else Color.White
-                        )
-                    }
-                }
-                if (!videoSourceIsCamera) {
-                    IconButton(
-                        onClick = onRotateDevice,
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                    ) {
-                        Icon(
-                            Icons.Filled.ScreenRotation,
-                            contentDescription = stringResource(R.string.cd_rotate_device),
-                            tint = Color.White
-                        )
-                    }
-                    if (onPasteClipboard != null) {
+                    if (canRecord) {
                         IconButton(
-                            onClick = onPasteClipboard,
-                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                            onClick = onToggleRecord,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (isRecording) Color.Red.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.6f)
+                            )
                         ) {
                             Icon(
-                                Icons.Filled.ContentPaste,
-                                contentDescription = stringResource(R.string.cd_paste_clipboard),
-                                tint = Color.White
+                                if (isRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                                contentDescription = stringResource(if (isRecording) R.string.scrcpy_recording_stopped else R.string.scrcpy_recording_started),
+                                tint = if (isRecording) Color.White else Color.Red
                             )
                         }
                     }
                     IconButton(
-                        onClick = onToggleFloatingNav,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showFloatingNav) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
+                        onClick = { captureScreenshot() },
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
                     ) {
                         Icon(
-                            Icons.Filled.Navigation,
-                            contentDescription = stringResource(R.string.display_floating_nav_title),
-                            tint = if (showFloatingNav) MaterialTheme.colorScheme.onPrimary else Color.White
+                            Icons.Filled.PhotoCamera,
+                            contentDescription = stringResource(R.string.cd_take_screenshot),
+                            tint = Color.White
                         )
+                    }
+                    if (videoSourceIsCamera) {
+                        IconButton(
+                            onClick = onToggleTorch,
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+                                contentDescription = stringResource(R.string.cd_toggle_torch),
+                                tint = if (torchOn) Color.Yellow else Color.White
+                            )
+                        }
+                    }
+                    if (!videoSourceIsCamera) {
+                        IconButton(
+                            onClick = onRotateDevice,
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                Icons.Filled.ScreenRotation,
+                                contentDescription = stringResource(R.string.cd_rotate_device),
+                                tint = Color.White
+                            )
+                        }
+                        if (onPasteClipboard != null) {
+                            IconButton(
+                                onClick = onPasteClipboard,
+                                colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                            ) {
+                                Icon(
+                                    Icons.Filled.ContentPaste,
+                                    contentDescription = stringResource(R.string.cd_paste_clipboard),
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onToggleFloatingNav,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showFloatingNav) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.Navigation,
+                                contentDescription = stringResource(R.string.display_floating_nav_title),
+                                tint = if (showFloatingNav) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = onToggleTouchpadOverlay,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showTouchpadOverlay) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.TouchApp,
+                                contentDescription = stringResource(R.string.tab_touchpad),
+                                tint = if (showTouchpadOverlay) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                onToggleKeyboard(!showKeyboard)
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showKeyboard || isImeVisible) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.Keyboard,
+                                contentDescription = stringResource(R.string.tab_keyboard),
+                                tint = if (showKeyboard || isImeVisible) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
                     }
                     IconButton(
-                        onClick = onToggleTouchpadOverlay,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showTouchpadOverlay) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
+                        onClick = onStop,
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
                     ) {
-                        Icon(
-                            Icons.Filled.TouchApp,
-                            contentDescription = stringResource(R.string.tab_touchpad),
-                            tint = if (showTouchpadOverlay) MaterialTheme.colorScheme.onPrimary else Color.White
-                        )
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_stop_mirroring), tint = Color.White)
                     }
-                    IconButton(
-                        onClick = {
-                            onToggleKeyboard(!showKeyboard)
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showKeyboard || isImeVisible) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
-                    ) {
-                        Icon(
-                            Icons.Filled.Keyboard,
-                            contentDescription = stringResource(R.string.tab_keyboard),
-                            tint = if (showKeyboard || isImeVisible) MaterialTheme.colorScheme.onPrimary else Color.White
-                        )
-                    }
-                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = overlayVisible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(400)),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .zIndex(10f)
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                RemoteVolumeSlider(
+                    level = remoteVolume,
+                    max = remoteVolumeMax,
+                    adjusting = volumeAdjusting,
+                    onAdjustingChange = { volumeAdjusting = it },
+                    onStep = onRemoteVolumeStep,
+                    onSetLevel = onRemoteVolumeSet,
+                    onActivity = { overlayActivity++ }
+                )
                 IconButton(
-                    onClick = onStop,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_stop_mirroring), tint = Color.White)
-                }
-            }
-        }
-
-        val currentSpanX by rememberUpdatedState(maxX - minX)
-        val currentSpanY by rememberUpdatedState(maxY - minY)
-
-        fun snapToNearestEdge() {
-            val curX = animNormX.value
-            val curY = animNormY.value
-
-            val distLeft = curX
-            val distRight = 1f - curX
-            val distTop = curY
-            val distBottom = 1f - curY
-
-            val minDist = minOf(distLeft, distRight, distTop, distBottom)
-
-            val targetX: Float
-            val targetY: Float
-
-            when (minDist) {
-                distLeft -> {
-                    targetX = 0f
-                    targetY = curY
-                }
-                distRight -> {
-                    targetX = 1f
-                    targetY = curY
-                }
-                distTop -> {
-                    targetX = curX
-                    targetY = 0f
-                }
-                else -> {
-                    targetX = curX
-                    targetY = 1f
-                }
-            }
-
-            normX = targetX
-            normY = targetY
-
-            coroutineScope.launch {
-                animNormX.animateTo(
-                    targetValue = targetX,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-            }
-            coroutineScope.launch {
-                animNormY.animateTo(
-                    targetValue = targetY,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-            }
-        }
-
-        val arrowButton = @Composable {
-            Box(
-                modifier = Modifier.pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = {
-                            controlsExpanded = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            if (currentSpanX > 0f) {
-                                val nextX = (animNormX.value + dragAmount.x / currentSpanX).coerceIn(0f, 1f)
-                                coroutineScope.launch { animNormX.snapTo(nextX) }
-                            }
-                            if (currentSpanY > 0f) {
-                                val nextY = (animNormY.value + dragAmount.y / currentSpanY).coerceIn(0f, 1f)
-                                coroutineScope.launch { animNormY.snapTo(nextY) }
-                            }
-                        },
-                        onDragEnd = {
-                            snapToNearestEdge()
-                        },
-                        onDragCancel = {
-                            snapToNearestEdge()
+                    onClick = {
+                        statsVisible = !statsVisible
+                        overlayActivity++
+                    },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = if (statsVisible) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        } else {
+                            Color.Black.copy(alpha = 0.6f)
                         }
                     )
-                }
-            ) {
-                IconButton(
-                    onClick = { controlsExpanded = !controlsExpanded },
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
                 ) {
                     Icon(
-                        imageVector = arrowIcon,
-                        contentDescription = stringResource(
-                            if (controlsExpanded) R.string.cd_collapse_controls else R.string.cd_expand_controls
-                        ),
-                        tint = Color.White
+                        io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.StreamStats,
+                        contentDescription = "Stream stats",
+                        tint = if (statsVisible) MaterialTheme.colorScheme.onPrimary else Color.White
                     )
-                }
-            }
-        }
-
-        val layoutOffsetModifier = Modifier.offset {
-            val effW = if (layoutWidth > 0) layoutWidth else buttonSizePx.roundToInt()
-            val effH = if (layoutHeight > 0) layoutHeight else buttonSizePx.roundToInt()
-
-            val curOffsetX = minX + animNormX.value * (maxX - minX)
-            val curOffsetY = minY + animNormY.value * (maxY - minY)
-
-            val x = when (side) {
-                ControlSide.RIGHT -> {
-                    val extraW = maxOf(0, effW - buttonSizePx.roundToInt())
-                    maxOf(paddingPx.roundToInt(), (curOffsetX - extraW).roundToInt())
-                }
-                ControlSide.LEFT -> {
-                    val maxXInt = maxOf(paddingPx.roundToInt(), (containerWidthPx - effW - paddingPx).roundToInt())
-                    minOf(curOffsetX.roundToInt(), maxXInt)
-                }
-                ControlSide.TOP, ControlSide.BOTTOM -> {
-                    val maxXInt = maxOf(paddingPx.roundToInt(), (containerWidthPx - effW - paddingPx).roundToInt())
-                    curOffsetX.roundToInt().coerceIn(paddingPx.roundToInt(), maxXInt)
-                }
-            }
-
-            val y = when (side) {
-                ControlSide.BOTTOM -> {
-                    val extraH = maxOf(0, effH - buttonSizePx.roundToInt())
-                    maxOf((topInsetPx + paddingPx).roundToInt(), (curOffsetY - extraH).roundToInt())
-                }
-                ControlSide.TOP -> {
-                    val maxYInt = maxOf((topInsetPx + paddingPx).roundToInt(), (containerHeightPx - effH - paddingPx).roundToInt())
-                    minOf(curOffsetY.roundToInt(), maxYInt)
-                }
-                ControlSide.LEFT, ControlSide.RIGHT -> {
-                    val maxYInt = maxOf((topInsetPx + paddingPx).roundToInt(), (containerHeightPx - effH - paddingPx).roundToInt())
-                    curOffsetY.roundToInt().coerceIn((topInsetPx + paddingPx).roundToInt(), maxYInt)
-                }
-            }
-
-            IntOffset(x, y)
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .then(layoutOffsetModifier)
-                .zIndex(10f)
-                .onSizeChanged {
-                    layoutWidth = it.width
-                    layoutHeight = it.height
-                }
-        ) {
-            when (side) {
-                ControlSide.LEFT -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        arrowButton()
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = Alignment.CenterStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = Alignment.CenterStart)
-                        ) {
-                            actionButtons()
-                        }
-                    }
-                }
-                ControlSide.RIGHT -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = Alignment.CenterEnd),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = Alignment.CenterEnd)
-                        ) {
-                            actionButtons()
-                        }
-                        arrowButton()
-                    }
-                }
-                ControlSide.TOP -> {
-                    Column(
-                        horizontalAlignment = if (animNormX.value > 0.5f) Alignment.End else Alignment.Start,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        arrowButton()
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = if (animNormX.value > 0.5f) Alignment.TopEnd else Alignment.TopStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = if (animNormX.value > 0.5f) Alignment.TopEnd else Alignment.TopStart)
-                        ) {
-                            actionButtons()
-                        }
-                    }
-                }
-                ControlSide.BOTTOM -> {
-                    Column(
-                        horizontalAlignment = if (animNormX.value > 0.5f) Alignment.End else Alignment.Start,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = if (animNormX.value > 0.5f) Alignment.BottomEnd else Alignment.BottomStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = if (animNormX.value > 0.5f) Alignment.BottomEnd else Alignment.BottomStart)
-                        ) {
-                            actionButtons()
-                        }
-                        arrowButton()
-                    }
                 }
             }
         }
@@ -3367,7 +3281,8 @@ private fun ScrcpyVideoPlayer(
             FloatingVerticalNavBar(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(16.dp),
+                    // Sit left of the control column while the overlay is showing
+                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = if (overlayVisible) 80.dp else 16.dp),
                 onNavBack = onNavBack,
                 onNavHome = onNavHome,
                 onNavRecents = onNavRecents

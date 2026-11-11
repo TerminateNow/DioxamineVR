@@ -232,6 +232,7 @@ class ScrcpyDecoder(
                     throw java.io.IOException("Video stream closed unexpectedly (payload EOF)")
                 }
                 totalBytesRead += packetSize
+                ScrcpyStreamStats.videoBytes.addAndGet(packetSize + 12L)
 
                 if (isConfigPacket) {
                     val configData = payloadBuffer.copyOf(packetSize)
@@ -345,6 +346,7 @@ class ScrcpyDecoder(
             when {
                 outIndex >= 0 -> {
                     runCatching { mc.releaseOutputBuffer(outIndex, true) }
+                        .onSuccess { ScrcpyStreamStats.framesRendered.incrementAndGet() }
                     outIndex = try { mc.dequeueOutputBuffer(bufferInfo, 0) } catch (e: IllegalStateException) {
                         return
                     }
