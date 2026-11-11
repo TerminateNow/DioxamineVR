@@ -2387,6 +2387,7 @@ private fun DisplaySettings(
 
     Spacer(Modifier.height(8.dp))
 
+    val navEnabled = isDisplaySupported
     Row(
         modifier = Modifier.toggleable(
             value = showFloatingNav && isDisplaySupported,
@@ -2397,7 +2398,6 @@ private fun DisplaySettings(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val navEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_floating_nav_title),
@@ -2419,6 +2419,7 @@ private fun DisplaySettings(
 
     Spacer(Modifier.height(8.dp))
 
+    val volEnabled = isDisplaySupported
     Row(
         modifier = Modifier.toggleable(
             value = config.bindVolumeKeys && isDisplaySupported,
@@ -2429,7 +2430,6 @@ private fun DisplaySettings(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val volEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_bind_volume_title),
@@ -2451,6 +2451,7 @@ private fun DisplaySettings(
 
     Spacer(Modifier.height(8.dp))
 
+    val clipEnabled = isDisplaySupported
     Row(
         modifier = Modifier.toggleable(
             value = config.clipboardSync && isDisplaySupported,
@@ -2461,7 +2462,6 @@ private fun DisplaySettings(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val clipEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_clipboard_sync_title),
@@ -2483,6 +2483,7 @@ private fun DisplaySettings(
 
     Spacer(Modifier.height(8.dp))
 
+    val touchpadEnabled = isDisplaySupported
     Row(
         modifier = Modifier.toggleable(
             value = showTouchpadOverlay && isDisplaySupported,
@@ -2493,7 +2494,6 @@ private fun DisplaySettings(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val touchpadEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_touchpad_title),
@@ -2515,6 +2515,7 @@ private fun DisplaySettings(
 
     Spacer(Modifier.height(8.dp))
 
+    val keyboardEnabled = isDisplaySupported
     Row(
         modifier = Modifier.toggleable(
             value = showKeyboard && isDisplaySupported,
@@ -2525,7 +2526,6 @@ private fun DisplaySettings(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val keyboardEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_keyboard_title),
