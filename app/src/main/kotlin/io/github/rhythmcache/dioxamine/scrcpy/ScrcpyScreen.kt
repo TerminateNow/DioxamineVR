@@ -1,5 +1,7 @@
 package io.github.rhythmcache.dioxamine.scrcpy
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
 import io.github.rhythmcache.dioxamine.ui.tv.Button
 import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
 import io.github.rhythmcache.dioxamine.ui.tv.IconButton
@@ -1832,7 +1834,19 @@ private fun VideoSettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.videoEnabled,
+            enabled = !isMirroring,
+            role = Role.Switch,
+            onValueChange = { isChecked ->
+                val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
+                    config.copy(videoEnabled = false, audioEnabled = true)
+                } else {
+                    config.copy(videoEnabled = isChecked)
+                }
+                onConfigChange(newConfig)
+            }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1846,14 +1860,7 @@ private fun VideoSettings(
         }
         Switch(
             checked = config.videoEnabled,
-            onCheckedChange = { isChecked ->
-                val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
-                    config.copy(videoEnabled = false, audioEnabled = true)
-                } else {
-                    config.copy(videoEnabled = isChecked)
-                }
-                onConfigChange(newConfig)
-            },
+            onCheckedChange = null,
             enabled = !isMirroring
         )
     }
@@ -2168,7 +2175,12 @@ private fun AudioSettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.audioEnabled && supportsAudio,
+            enabled = supportsAudio && !isMirroring,
+            role = Role.Switch,
+            onValueChange = { onConfigChange(config.copy(audioEnabled = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2183,7 +2195,7 @@ private fun AudioSettings(
         }
         Switch(
             checked = config.audioEnabled && supportsAudio,
-            onCheckedChange = { onConfigChange(config.copy(audioEnabled = it)) },
+            onCheckedChange = null,
             enabled = supportsAudio && !isMirroring
         )
     }
@@ -2283,7 +2295,14 @@ private fun AudioSettings(
             val supportsAudioDup = apiLevel >= 33
             Spacer(Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.toggleable(
+            value = config.audioDup && supportsAudioDup,
+            enabled = supportsAudioDup && !isMirroring,
+            role = Role.Switch,
+            onValueChange = { isChecked ->
+                        onConfigChange(config.copy(audioDup = isChecked))
+                    }
+        ).fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -2298,9 +2317,7 @@ private fun AudioSettings(
                 }
                 Switch(
                     checked = config.audioDup && supportsAudioDup,
-                    onCheckedChange = { isChecked ->
-                        onConfigChange(config.copy(audioDup = isChecked))
-                    },
+                    onCheckedChange = null,
                     enabled = supportsAudioDup && !isMirroring
                 )
             }
@@ -2338,12 +2355,17 @@ private fun DisplaySettings(
     )
     Spacer(Modifier.height(8.dp))
 
+    val screenOffEnabled = !isMirroring && isDisplaySupported
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.turnScreenOff && isDisplaySupported,
+            enabled = screenOffEnabled,
+            role = Role.Switch,
+            onValueChange = { onConfigChange(config.copy(turnScreenOff = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val screenOffEnabled = !isMirroring && isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_screen_off_title),
@@ -2358,7 +2380,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.turnScreenOff && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(turnScreenOff = it)) },
+            onCheckedChange = null,
             enabled = screenOffEnabled
         )
     }
@@ -2366,7 +2388,12 @@ private fun DisplaySettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showFloatingNav && isDisplaySupported,
+            enabled = navEnabled,
+            role = Role.Switch,
+            onValueChange = { onShowFloatingNavChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2385,7 +2412,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showFloatingNav && isDisplaySupported,
-            onCheckedChange = { onShowFloatingNavChange(it) },
+            onCheckedChange = null,
             enabled = navEnabled
         )
     }
@@ -2393,7 +2420,12 @@ private fun DisplaySettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.bindVolumeKeys && isDisplaySupported,
+            enabled = volEnabled,
+            role = Role.Switch,
+            onValueChange = { onConfigChange(config.copy(bindVolumeKeys = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2412,7 +2444,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.bindVolumeKeys && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(bindVolumeKeys = it)) },
+            onCheckedChange = null,
             enabled = volEnabled
         )
     }
@@ -2420,7 +2452,12 @@ private fun DisplaySettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.clipboardSync && isDisplaySupported,
+            enabled = clipEnabled,
+            role = Role.Switch,
+            onValueChange = { onConfigChange(config.copy(clipboardSync = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2439,7 +2476,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.clipboardSync && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(clipboardSync = it)) },
+            onCheckedChange = null,
             enabled = clipEnabled
         )
     }
@@ -2447,7 +2484,12 @@ private fun DisplaySettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showTouchpadOverlay && isDisplaySupported,
+            enabled = touchpadEnabled,
+            role = Role.Switch,
+            onValueChange = { onShowTouchpadChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2466,7 +2508,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showTouchpadOverlay && isDisplaySupported,
-            onCheckedChange = { onShowTouchpadChange(it) },
+            onCheckedChange = null,
             enabled = touchpadEnabled
         )
     }
@@ -2474,7 +2516,12 @@ private fun DisplaySettings(
     Spacer(Modifier.height(8.dp))
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showKeyboard && isDisplaySupported,
+            enabled = keyboardEnabled,
+            role = Role.Switch,
+            onValueChange = { onShowKeyboardChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2493,7 +2540,7 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showKeyboard && isDisplaySupported,
-            onCheckedChange = { onShowKeyboardChange(it) },
+            onCheckedChange = null,
             enabled = keyboardEnabled
         )
     }

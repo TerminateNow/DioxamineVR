@@ -24,7 +24,17 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.foundation.focusGroup
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.InputMode
@@ -214,16 +224,24 @@ fun DioxamineApp(keyDir: File) {
 
     // Side rail focus state: expanded (icon + label) while D-pad focus is on the rail,
     // collapsed to icons only while focus is inside the page content.
+    // The rail only opens via remote Back or pressing Left from the page edge.
     val tabFocusRequesters = remember { Tab.entries.associateWith { FocusRequester() } }
+    val contentFocusRequester = remember { FocusRequester() }
     var railHasFocus by remember { mutableStateOf(false) }
+    var contentHasFocus by remember { mutableStateOf(false) }
     val inputModeManager = LocalInputModeManager.current
     val usingDpad = inputModeManager.inputMode == InputMode.Keyboard
 
-    // On launch with a remote/D-pad, start with focus on the selected tab so the remote works immediately.
+    // On launch with a remote/D-pad, put focus on the page (not the rail) so the remote works
+    // immediately. Only if the page has nothing focusable does focus fall back to the rail.
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(150)
         if (inputModeManager.inputMode == InputMode.Keyboard) {
-            runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
+            runCatching { contentFocusRequester.requestFocus() }
+            kotlinx.coroutines.delay(100)
+            if (!contentHasFocus && !railHasFocus) {
+                runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
+            }
         }
     }
 
@@ -276,10 +294,19 @@ fun DioxamineApp(keyDir: File) {
                     onSelect = { selectedTab = it }
                 )
             }
+            // Quick fade-in when switching tabs (old page is not kept alive, so no overlap cost).
+            val pageAlpha = remember(selectedTab) { Animatable(0f) }
+            LaunchedEffect(selectedTab) {
+                pageAlpha.animateTo(1f, tween(durationMillis = 180, easing = LinearOutSlowInEasing))
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .graphicsLayer { alpha = pageAlpha.value }
+                    .focusRequester(contentFocusRequester)
+                    .onFocusChanged { contentHasFocus = it.hasFocus }
+                    .focusGroup()
             ) {
             when (selectedTab) {
                 Tab.ADB -> AdbScreen(vm)
@@ -319,6 +346,7 @@ private fun SideTabRail(
 ) {
     val width by animateDpAsState(
         targetValue = if (expanded) RailExpandedWidth else RailCollapsedWidth,
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
         label = "railWidth"
     )
 
@@ -328,8 +356,18 @@ private fun SideTabRail(
             .width(width)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .onFocusChanged { onFocusChanged(it.hasFocus) }
-            // Entering the rail with the D-pad lands on the last focused tab (or the selected one)
-            .focusRestorer(focusRequesters.getValue(selectedTab))
+            // The rail can only be entered by pressing Left (lands on the selected tab) or by a
+            // direct request (remote Back). Up/Down/Right from the page never wander into it.
+            .focusProperties {
+                onEnter = {
+                    when (requestedFocusDirection) {
+                        FocusDirection.Left -> focusRequesters.getValue(selectedTab).requestFocus()
+                        FocusDirection.Enter -> Unit
+                        else -> cancelFocusChange()
+                    }
+                }
+            }
+            .focusGroup()
             .selectableGroup()
             .padding(horizontal = 6.dp, vertical = 12.dp),
         // Tab buttons are centered vertically on the rail
@@ -400,7 +438,12 @@ private fun SideTabRailItem(
             tint = contentColor,
             modifier = Modifier.size(24.dp)
         )
-        if (expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(durationMillis = 140, delayMillis = 60)),
+            exit = fadeOut(tween(durationMillis = 80))
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.width(10.dp))
             Text(
                 text = label,
@@ -411,6 +454,7 @@ private fun SideTabRailItem(
                 softWrap = false,
                 overflow = TextOverflow.Clip
             )
+          }
         }
     }
 }

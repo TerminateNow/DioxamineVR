@@ -121,8 +121,11 @@ fun DioxamineTheme(
     CompositionLocalProvider(LocalDarkTheme provides darkTheme) {
         MaterialTheme(colorScheme = colorScheme) {
             // Clickable rows get the normal ripple plus a thin text-coloured border when focused (TV / D-pad).
+            // Scrolling lists keep the D-pad focused item away from the edge, with smooth scrolling.
+            @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
             CompositionLocalProvider(
                 LocalIndication provides io.github.rhythmcache.dioxamine.ui.tv.rememberTvFocusIndication(ripple()),
+                androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides io.github.rhythmcache.dioxamine.ui.tv.TvBringIntoViewSpec,
                 content = content
             )
         }

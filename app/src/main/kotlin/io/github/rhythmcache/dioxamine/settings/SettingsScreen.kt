@@ -1,5 +1,9 @@
 package io.github.rhythmcache.dioxamine.settings
 
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
 import io.github.rhythmcache.dioxamine.ui.tv.Button
 import io.github.rhythmcache.dioxamine.ui.tv.IconButton
 import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
@@ -290,7 +294,15 @@ fun SettingsScreen(vm: AdbViewModel) {
         ) {
                         // Monet / Dynamic Colors Option
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = useMonet && isMonetSupported,
+            enabled = isMonetSupported,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    useMonet = checked
+                                    prefs.edit().putBoolean("use_monet", checked).apply()
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -311,11 +323,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             Switch(
                                 checked = useMonet && isMonetSupported,
                                 enabled = isMonetSupported,
-                                onCheckedChange = { checked ->
-                                    useMonet = checked
-                                    prefs.edit().putBoolean("use_monet", checked).apply()
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(8.dp))
@@ -436,7 +444,18 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { keyExpanded = !keyExpanded }
         ) {
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = detectLocalhost,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    detectLocalhost = checked
+                                    prefs.edit().putBoolean("adb_detect_localhost", checked).apply()
+                                    if (checked) {
+                                        vm.triggerLocalAdbCheck()
+                                    }
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -455,20 +474,24 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = detectLocalhost,
-                                onCheckedChange = { checked ->
-                                    detectLocalhost = checked
-                                    prefs.edit().putBoolean("adb_detect_localhost", checked).apply()
-                                    if (checked) {
-                                        vm.triggerLocalAdbCheck()
-                                    }
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(4.dp))
 
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = autoConnectLocalhost,
+            enabled = detectLocalhost,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    autoConnectLocalhost = checked
+                                    prefs.edit().putBoolean("adb_autoconnect_localhost", checked).apply()
+                                    if (checked) {
+                                        vm.triggerLocalAdbCheck()
+                                    }
+                                }
+        )
                                 .fillMaxWidth()
                                 .alpha(if (detectLocalhost) 1f else 0.38f)
                                 .padding(vertical = 8.dp),
@@ -489,14 +512,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             Switch(
                                 checked = autoConnectLocalhost,
                                 enabled = detectLocalhost,
-                                onCheckedChange = { checked ->
-                                    autoConnectLocalhost = checked
-                                    prefs.edit().putBoolean("adb_autoconnect_localhost", checked).apply()
-                                    if (checked) {
-                                        vm.triggerLocalAdbCheck()
-                                    }
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(8.dp))
@@ -588,7 +604,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { scrcpyExpanded = !scrcpyExpanded }
         ) {
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = allowCustomValues,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    allowCustomValues = checked
+                                    prefs.edit().putBoolean("scrcpy_allow_custom_values", checked).apply()
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -607,17 +631,21 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = allowCustomValues,
-                                onCheckedChange = { checked ->
-                                    allowCustomValues = checked
-                                    prefs.edit().putBoolean("scrcpy_allow_custom_values", checked).apply()
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(4.dp))
 
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = autoRecord,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    autoRecord = checked
+                                    prefs.edit().putBoolean("scrcpy_auto_record", checked).apply()
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -636,11 +664,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = autoRecord,
-                                onCheckedChange = { checked ->
-                                    autoRecord = checked
-                                    prefs.edit().putBoolean("scrcpy_auto_record", checked).apply()
-                                }
-                            )
+                                onCheckedChange = null)
                         }
         }
 
@@ -655,7 +679,16 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { logsExpanded = !logsExpanded }
         ) {
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = loggingEnabled,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    loggingEnabled = checked
+                                    AppLogger.enabled = checked
+                                    prefs.edit().putBoolean("app_logging_enabled", checked).apply()
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -674,12 +707,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = loggingEnabled,
-                                onCheckedChange = { checked ->
-                                    loggingEnabled = checked
-                                    AppLogger.enabled = checked
-                                    prefs.edit().putBoolean("app_logging_enabled", checked).apply()
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(12.dp))
@@ -725,7 +753,15 @@ fun SettingsScreen(vm: AdbViewModel) {
         ) {
                         // WebView Debugging Toggle
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = pluginWebViewDebug,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    pluginWebViewDebug = checked
+                                    prefs.edit().putBoolean("plugin_webview_debug", checked).apply()
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -744,11 +780,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = pluginWebViewDebug,
-                                onCheckedChange = { checked ->
-                                    pluginWebViewDebug = checked
-                                    prefs.edit().putBoolean("plugin_webview_debug", checked).apply()
-                                }
-                            )
+                                onCheckedChange = null)
                         }
 
                         Text(
@@ -802,7 +834,8 @@ fun SettingsScreen(vm: AdbViewModel) {
                                 },
                                 shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.height(36.dp)
+                                // The whole row is already clickable/focusable; avoid a second D-pad stop.
+                                modifier = Modifier.height(36.dp).focusProperties { canFocus = false }
                             ) {
                                 Text(stringResource(R.string.settings_plugins_btn_manage), style = MaterialTheme.typography.bodySmall)
                             }
@@ -820,7 +853,14 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { miscExpanded = !miscExpanded }
         ) {
                         Row(
-                            modifier = Modifier
+                            modifier = Modifier.toggleable(
+            value = keepAlive,
+            enabled = true,
+            role = Role.Switch,
+            onValueChange = { checked ->
+                                    onToggleKeepAlive(checked)
+                                }
+        )
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -839,10 +879,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = keepAlive,
-                                onCheckedChange = { checked ->
-                                    onToggleKeepAlive(checked)
-                                }
-                            )
+                                onCheckedChange = null)
                         }
         }
 
@@ -1298,22 +1335,38 @@ private fun ExpandableSettingsCard(
                         }
                     }
                 }
+                val arrowRotation by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (expanded) 180f else 0f,
+                    animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                    label = "expandArrow"
+                )
                 Icon(
-                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = stringResource(if (expanded) R.string.cd_collapse else R.string.cd_expand)
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = stringResource(if (expanded) R.string.cd_collapse else R.string.cd_expand),
+                    modifier = Modifier.graphicsLayer { rotationZ = arrowRotation }
                 )
             }
 
-            if (expanded) {
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            AnimatedVisibility(
+                visible = expanded,
+                enter = androidx.compose.animation.expandVertically(
+                    animationSpec = androidx.compose.animation.core.tween(220, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) + androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180, delayMillis = 40)),
+                exit = androidx.compose.animation.shrinkVertically(
+                    animationSpec = androidx.compose.animation.core.tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                ) + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
+            ) {
+                Column {
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalAlignment = contentHorizontalAlignment,
-                    content = content
-                )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = contentHorizontalAlignment,
+                        content = content
+                    )
+                }
             }
         }
     }

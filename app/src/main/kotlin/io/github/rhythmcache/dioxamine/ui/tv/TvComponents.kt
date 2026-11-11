@@ -56,7 +56,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawOutline
@@ -275,6 +280,27 @@ fun IconButton(
     )
 }
 
+/**
+ * Oval (pill) outline that hugs a Material switch's 52x32dp track, with a small gap.
+ * The switch's layout box is taller than its track (48dp touch target), so the pill is
+ * centered vertically and allowed to extend slightly past the sides.
+ */
+private object SwitchTrackPillShape : Shape {
+    private val TrackHeight = 32.dp
+    private val Gap = 3.dp
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val gap = with(density) { Gap.toPx() }
+        val height = minOf(size.height, with(density) { TrackHeight.toPx() }) + gap * 2
+        val top = (size.height - height) / 2f
+        return Outline.Rounded(
+            RoundRect(
+                left = -gap, top = top, right = size.width + gap, bottom = top + height,
+                cornerRadius = CornerRadius(height / 2f)
+            )
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Chips, switches, menu items
 // ---------------------------------------------------------------------------
@@ -318,7 +344,7 @@ fun Switch(
 ) {
     val source = interactionSource ?: remember { MutableInteractionSource() }
     val textColor = MaterialTheme.colorScheme.onSurface
-    val ring = remember(textColor) { FocusBorderIndication(CircleShape, textColor) }
+    val ring = remember(textColor) { FocusBorderIndication(SwitchTrackPillShape, textColor) }
     androidx.compose.material3.Switch(
         checked = checked, onCheckedChange = onCheckedChange,
         modifier = modifier.indication(source, ring),
@@ -541,3 +567,31 @@ fun TextField(
         )
     }
 }
+
+// ---------------------------------------------------------------------------
+// Smooth D-pad scrolling
+// ---------------------------------------------------------------------------
+
+/**
+ * When the remote moves focus to an item near the edge of a scrolling list, scroll a little
+ * early so the focused item keeps some breathing room (15% of the viewport) from the edge.
+ * The scroll itself uses Compose's default smooth animation, so lists glide instead of
+ * jumping in small steps.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+val TvBringIntoViewSpec: androidx.compose.foundation.gestures.BringIntoViewSpec =
+    object : androidx.compose.foundation.gestures.BringIntoViewSpec {
+        override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+            val trailing = offset + size
+            if (size >= containerSize) {
+                // Bigger than the viewport: align its start, unless it already fills the view.
+                return if (offset > 0f || trailing < containerSize) offset else 0f
+            }
+            val margin = minOf(containerSize * 0.15f, (containerSize - size) / 2f)
+            return when {
+                offset < margin -> offset - margin
+                trailing > containerSize - margin -> trailing - (containerSize - margin)
+                else -> 0f
+            }
+        }
+    }
