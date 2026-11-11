@@ -231,7 +231,7 @@
     <string name="scrcpy_audio_only_banner">Audiostreaming aktiv</string>
     <string name="scrcpy_audio_only_desc">Nur-Audio-Modus (Videostream deaktiviert)</string>
     <string name="label_resolution">Maximale Größe</string>
-    <string name="label_add_chip">+ Hinzufügen</string>
+    <string name="label_add_chip">Hinzufügen</string>
     <string name="dialog_add_max_size_title">Benutzerdefinierte Maximalgröße hinzufügen</string>
     <string name="dialog_add_max_size_msg">Maximale Größe in Pixeln eingeben (z. B. 1440 oder 2160):</string>
     <string name="dialog_add_fps_title">Benutzerdefinierte Bildrate hinzufügen</string>

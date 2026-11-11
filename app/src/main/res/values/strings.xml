@@ -175,14 +175,15 @@
     <string name="scrcpy_invalid_config_prefix">Invalid Config:\n</string>
     <string name="scrcpy_mirroring_idle">Mirroring Idle</string>
     <string name="scrcpy_title">scrcpy Screen Mirroring</string>
-    <string name="scrcpy_target">Target: %1$s</string>
-    <string name="scrcpy_target_version">Target: %1$s &#8226; Android %2$s</string>
+    <string name="scrcpy_target">Mirror device: %1$s</string>
+    <string name="scrcpy_target_version">Mirror device: %1$s &#8226; Android %2$s</string>
     <string name="scrcpy_start_mirroring">Start Mirroring</string>
     <string name="scrcpy_stop_mirroring">Stop Mirroring</string>
     <string name="scrcpy_remember_settings">Remember for this device</string>
     <string name="scrcpy_btn_reset_defaults">Reset defaults</string>
     <string name="scrcpy_settings_reset">Settings reset to default</string>
-    <string name="scrcpy_tab_configurator">Configurator</string>
+    <string name="scrcpy_tab_configurator">Settings</string>
+    <string name="scrcpy_back_again_to_exit">Press back again to exit fullscreen.</string>
     <string name="scrcpy_tab_logs">Logs</string>
     <string name="scrcpy_logs_empty">No scrcpy logs yet.</string>
 
@@ -231,7 +232,7 @@
     <string name="scrcpy_audio_only_banner">Audio Streaming Active</string>
     <string name="scrcpy_audio_only_desc">Audio-only mode (video stream disabled)</string>
     <string name="label_resolution">Max Size</string>
-    <string name="label_add_chip">+ Add</string>
+    <string name="label_add_chip">Custom…</string>
     <string name="dialog_add_max_size_title">Add Custom Max Size</string>
     <string name="dialog_add_max_size_msg">Enter maximum size in pixels (e.g. 1440 or 2160):</string>
     <string name="dialog_add_fps_title">Add Custom Frame Rate</string>

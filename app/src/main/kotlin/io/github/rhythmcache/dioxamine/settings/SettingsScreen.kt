@@ -293,11 +293,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { themeExpanded = !themeExpanded }
         ) {
                         // Monet / Dynamic Colors Option
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus1 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = useMonet && isMonetSupported,
             enabled = isMonetSupported,
             role = Role.Switch,
+            interactionSource = switchRowFocus1,
+            indication = null,
             onValueChange = { checked ->
                                     useMonet = checked
                                     prefs.edit().putBoolean("use_monet", checked).apply()
@@ -323,6 +327,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             Switch(
                                 checked = useMonet && isMonetSupported,
                                 enabled = isMonetSupported,
+                                interactionSource = switchRowFocus1,
                                 onCheckedChange = null)
                         }
 
@@ -443,11 +448,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             expanded = keyExpanded,
             onToggle = { keyExpanded = !keyExpanded }
         ) {
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus2 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = detectLocalhost,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus2,
+            indication = null,
             onValueChange = { checked ->
                                     detectLocalhost = checked
                                     prefs.edit().putBoolean("adb_detect_localhost", checked).apply()
@@ -474,16 +483,21 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = detectLocalhost,
+                                interactionSource = switchRowFocus2,
                                 onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(4.dp))
 
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus3 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = autoConnectLocalhost,
             enabled = detectLocalhost,
             role = Role.Switch,
+            interactionSource = switchRowFocus3,
+            indication = null,
             onValueChange = { checked ->
                                     autoConnectLocalhost = checked
                                     prefs.edit().putBoolean("adb_autoconnect_localhost", checked).apply()
@@ -512,6 +526,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             Switch(
                                 checked = autoConnectLocalhost,
                                 enabled = detectLocalhost,
+                                interactionSource = switchRowFocus3,
                                 onCheckedChange = null)
                         }
 
@@ -603,11 +618,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             expanded = scrcpyExpanded,
             onToggle = { scrcpyExpanded = !scrcpyExpanded }
         ) {
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus4 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = allowCustomValues,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus4,
+            indication = null,
             onValueChange = { checked ->
                                     allowCustomValues = checked
                                     prefs.edit().putBoolean("scrcpy_allow_custom_values", checked).apply()
@@ -631,16 +650,21 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = allowCustomValues,
+                                interactionSource = switchRowFocus4,
                                 onCheckedChange = null)
                         }
 
                         Spacer(Modifier.height(4.dp))
 
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus5 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = autoRecord,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus5,
+            indication = null,
             onValueChange = { checked ->
                                     autoRecord = checked
                                     prefs.edit().putBoolean("scrcpy_auto_record", checked).apply()
@@ -664,6 +688,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = autoRecord,
+                                interactionSource = switchRowFocus5,
                                 onCheckedChange = null)
                         }
         }
@@ -678,11 +703,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             expanded = logsExpanded,
             onToggle = { logsExpanded = !logsExpanded }
         ) {
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus6 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = loggingEnabled,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus6,
+            indication = null,
             onValueChange = { checked ->
                                     loggingEnabled = checked
                                     AppLogger.enabled = checked
@@ -707,6 +736,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = loggingEnabled,
+                                interactionSource = switchRowFocus6,
                                 onCheckedChange = null)
                         }
 
@@ -752,11 +782,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             onToggle = { pluginExpanded = !pluginExpanded }
         ) {
                         // WebView Debugging Toggle
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus7 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = pluginWebViewDebug,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus7,
+            indication = null,
             onValueChange = { checked ->
                                     pluginWebViewDebug = checked
                                     prefs.edit().putBoolean("plugin_webview_debug", checked).apply()
@@ -780,6 +814,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = pluginWebViewDebug,
+                                interactionSource = switchRowFocus7,
                                 onCheckedChange = null)
                         }
 
@@ -852,11 +887,15 @@ fun SettingsScreen(vm: AdbViewModel) {
             expanded = miscExpanded,
             onToggle = { miscExpanded = !miscExpanded }
         ) {
+                        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+                        val switchRowFocus8 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Row(
                             modifier = Modifier.toggleable(
             value = keepAlive,
             enabled = true,
             role = Role.Switch,
+            interactionSource = switchRowFocus8,
+            indication = null,
             onValueChange = { checked ->
                                     onToggleKeepAlive(checked)
                                 }
@@ -879,6 +918,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             }
                             Switch(
                                 checked = keepAlive,
+                                interactionSource = switchRowFocus8,
                                 onCheckedChange = null)
                         }
         }
