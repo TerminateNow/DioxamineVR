@@ -171,7 +171,8 @@ private fun StatRow(label: String, value: String) {
  * Vertical volume slider for the mirrored device.
  *
  * D-pad: focus it, press Select to start adjusting (it lights up), then Up/Down change the
- * volume. Select again, Back, Left or moving focus away stops adjusting.
+ * volume and Right toggles mute (restoring the previous level on unmute). Select again, Back,
+ * Left or moving focus away stops adjusting.
  * Touch: tap or drag along the track.
  *
  * [level]/[max] are null when the device's absolute volume can't be read; Up/Down then send
@@ -187,6 +188,7 @@ fun RemoteVolumeSlider(
     onSetLevel: (Int) -> Unit,
     onActivity: () -> Unit,
     modifier: Modifier = Modifier,
+    onToggleMute: () -> Unit = {},
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -212,6 +214,7 @@ fun RemoteVolumeSlider(
                 when (e.key) {
                     Key.DirectionUp -> { onStep(+1); onActivity(); true }
                     Key.DirectionDown -> { onStep(-1); onActivity(); true }
+                    Key.DirectionRight -> { onToggleMute(); onActivity(); true }
                     else -> false
                 }
             }

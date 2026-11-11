@@ -22,6 +22,7 @@ import android.view.SurfaceView
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import android.graphics.Bitmap
 import android.os.Handler
@@ -488,6 +489,26 @@ fun ScrcpyScreen(
             activeSession?.sendKeycode(1, key)
         }
     }
+    // Mute toggle (Right while the volume slider is active). Remembers the level to restore.
+    var preMuteVolume by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(isMirroring) { if (!isMirroring) preMuteVolume = null }
+    fun toggleRemoteMute() {
+        val cur = remoteVolume
+        val max = remoteVolumeMax
+        if (cur != null && max != null) {
+            if (cur > 0) {
+                preMuteVolume = cur
+                setRemoteVolume(0)
+            } else {
+                setRemoteVolume((preMuteVolume ?: (max / 2)).coerceAtLeast(1))
+                preMuteVolume = null
+            }
+        } else {
+            // Absolute volume unavailable: toggle with the device's mute key.
+            activeSession?.sendKeycode(0, KeyEvent.KEYCODE_VOLUME_MUTE)
+            activeSession?.sendKeycode(1, KeyEvent.KEYCODE_VOLUME_MUTE)
+        }
+    }
 
     // Double-press Back while mirroring: first press shows a hint for 3 s, second press stops
     // mirroring and returns to the Settings tab. (An expanded control overlay closes first.)
@@ -500,9 +521,25 @@ fun ScrcpyScreen(
         }
     }
     // Mirroring always plays fullscreen.
+    // When a stream ends for any reason (stop button, double Back, or a dropped connection)
+    // the player and whatever control had focus are removed, so focus is put back on the
+    // page explicitly; otherwise the D-pad has nothing to move from until Back is pressed.
+    val startButtonFocus = remember { FocusRequester() }
+    val pageFocus = remember { FocusRequester() }
+    var wasMirroring by remember { mutableStateOf(false) }
     LaunchedEffect(isMirroring) {
         isFullScreen = isMirroring
+        val streamEnded = wasMirroring && !isMirroring
+        wasMirroring = isMirroring
         if (!isMirroring) backExitArmed = false
+        if (streamEnded) {
+            selectedTab = ScrcpyTab.CONFIGURATOR
+            kotlinx.coroutines.delay(150)
+            runCatching {
+                if (isDeviceConnected && isModeSupported) startButtonFocus.requestFocus()
+                else pageFocus.requestFocus()
+            }
+        }
     }
     BackHandler(enabled = isMirroring) {
         if (backExitArmed) {
@@ -614,7 +651,8 @@ fun ScrcpyScreen(
                     remoteVolume = remoteVolume,
                     remoteVolumeMax = remoteVolumeMax,
                     onRemoteVolumeStep = { stepRemoteVolume(it) },
-                    onRemoteVolumeSet = { setRemoteVolume(it) }
+                    onRemoteVolumeSet = { setRemoteVolume(it) },
+                    onRemoteVolumeMuteToggle = { toggleRemoteMute() }
                 )
             } else {
                 ScrcpyAudioOnlyPlayer(
@@ -653,6 +691,8 @@ fun ScrcpyScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
+                    .focusRequester(pageFocus)
+                    .focusGroup()
             ) {
                 // Title bar: mirror device on the left, compact Start button on the right
                 Row(
@@ -694,6 +734,7 @@ fun ScrcpyScreen(
                         }
                     },
                         enabled = isDeviceConnected && isModeSupported,
+                        modifier = Modifier.focusRequester(startButtonFocus),
                         shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
@@ -2705,7 +2746,8 @@ private fun ScrcpyVideoPlayer(
     remoteVolume: Int? = null,
     remoteVolumeMax: Int? = null,
     onRemoteVolumeStep: (Int) -> Unit = {},
-    onRemoteVolumeSet: (Int) -> Unit = {}
+    onRemoteVolumeSet: (Int) -> Unit = {},
+    onRemoteVolumeMuteToggle: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -2785,12 +2827,18 @@ private fun ScrcpyVideoPlayer(
     var volumeAdjusting by remember { mutableStateOf(false) }
     var statsVisible by rememberSaveable { mutableStateOf(false) }
     var rootFocused by remember { mutableStateOf(false) }
+    // Overlay columns, left to right: volume/stats | floating nav (optional) | control buttons.
+    // Left/Right jump between them explicitly instead of using spatial focus search, which
+    // could land on the hidden keyboard field or the video view in the middle of the screen.
     val overlayControlsFocus = remember { FocusRequester() }
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val leftControlsFocus = remember { FocusRequester() }
+    val floatingNavFocus = remember { FocusRequester() }
+    var rightColumnHasFocus by remember { mutableStateOf(false) }
+    var leftColumnHasFocus by remember { mutableStateOf(false) }
     val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     fun pressBack() { backDispatcher?.onBackPressed() }
 
-    // Back (or Left at the edge) hides the overlay; while adjusting volume it ends adjusting first.
+    // Back (or Left from the left column) hides the overlay; while adjusting volume it ends adjusting first.
     BackHandler(enabled = overlayVisible) {
         overlayVisible = false
     }
@@ -2863,16 +2911,33 @@ private fun ScrcpyVideoPlayer(
                 if (showKeyboard && !videoSourceIsCamera) return@onPreviewKeyEvent false
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     overlayActivity++
+                    val navShown = showFloatingNav && !videoSourceIsCamera
                     when (keyEvent.key) {
                         Key.DirectionLeft -> {
-                            // Left acts as Back unless it can move focus to a control on the left.
+                            // Hidden overlay: Left shows it, like every other direction.
+                            // Open overlay: Left moves one column left; from the left column it
+                            // acts as Back (hides the overlay).
                             when {
-                                volumeAdjusting || !overlayVisible || rootFocused -> pressBack()
-                                !focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Left) -> pressBack()
+                                !overlayVisible -> overlayVisible = true
+                                volumeAdjusting -> volumeAdjusting = false
+                                leftColumnHasFocus -> pressBack()
+                                rightColumnHasFocus && navShown -> runCatching { floatingNavFocus.requestFocus() }
+                                else -> runCatching { leftControlsFocus.requestFocus() }
                             }
                             return@onPreviewKeyEvent true
                         }
-                        Key.DirectionUp, Key.DirectionDown, Key.DirectionRight,
+                        Key.DirectionRight -> {
+                            when {
+                                !overlayVisible -> overlayVisible = true
+                                // Adjusting volume: the slider handles Right (mute toggle).
+                                volumeAdjusting -> return@onPreviewKeyEvent false
+                                leftColumnHasFocus && navShown -> runCatching { floatingNavFocus.requestFocus() }
+                                rightColumnHasFocus -> Unit // already the rightmost column
+                                else -> runCatching { overlayControlsFocus.requestFocus() }
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp, Key.DirectionDown,
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                             if (!overlayVisible) {
                                 overlayVisible = true
@@ -2901,6 +2966,9 @@ private fun ScrcpyVideoPlayer(
             modifier = Modifier
                 .size(1.dp)
                 .alpha(0f)
+                // Only focusable while the Keyboard toggle is on; otherwise D-pad focus could
+                // land here, pop up the IME and swallow the arrow keys.
+                .focusProperties { canFocus = showKeyboard && !videoSourceIsCamera }
                 .focusRequester(keyboardFocusRequester)
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
@@ -2967,11 +3035,10 @@ private fun ScrcpyVideoPlayer(
                 SurfaceView(ctx).apply {
                     surfaceViewRef = this
                     keepScreenOn = true
-                    isFocusable = true
-                    isFocusableInTouchMode = true
-                    if (bindVolumeKeys && !videoSourceIsCamera) {
-                        requestFocus()
-                    }
+                    // Not a D-pad focus target: volume keys are forwarded by the player's
+                    // key handler, and a focusable view here steals focus from the overlay.
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     setOnKeyListener { _, keyCode, event ->
                         if (bindVolumeKeys && !videoSourceIsCamera && (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
                                                keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
@@ -3110,6 +3177,7 @@ private fun ScrcpyVideoPlayer(
                     .padding(end = 16.dp, top = 16.dp, bottom = 16.dp)
                     .verticalScroll(rememberScrollState())
                     .focusRequester(overlayControlsFocus)
+                    .onFocusChanged { rightColumnHasFocus = it.hasFocus }
                     .focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -3242,7 +3310,11 @@ private fun ScrcpyVideoPlayer(
                 .zIndex(10f)
         ) {
             Column(
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp),
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp)
+                    .focusRequester(leftControlsFocus)
+                    .onFocusChanged { leftColumnHasFocus = it.hasFocus }
+                    .focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -3253,6 +3325,7 @@ private fun ScrcpyVideoPlayer(
                     onAdjustingChange = { volumeAdjusting = it },
                     onStep = onRemoteVolumeStep,
                     onSetLevel = onRemoteVolumeSet,
+                    onToggleMute = onRemoteVolumeMuteToggle,
                     onActivity = { overlayActivity++ }
                 )
                 IconButton(
@@ -3282,7 +3355,9 @@ private fun ScrcpyVideoPlayer(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     // Sit left of the control column while the overlay is showing
-                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = if (overlayVisible) 80.dp else 16.dp),
+                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = if (overlayVisible) 80.dp else 16.dp)
+                    .focusRequester(floatingNavFocus)
+                    .focusGroup(),
                 onNavBack = onNavBack,
                 onNavHome = onNavHome,
                 onNavRecents = onNavRecents
