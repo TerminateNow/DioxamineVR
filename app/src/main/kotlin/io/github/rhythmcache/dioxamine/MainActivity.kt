@@ -16,11 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.draw.clip
@@ -307,8 +305,8 @@ fun DioxamineApp(keyDir: File) {
 // Left-side tab rail (TV / D-pad friendly)
 // ---------------------------------------------------------------------------
 
-private val RailExpandedWidth = 200.dp
-private val RailCollapsedWidth = 80.dp
+private val RailExpandedWidth = 132.dp   // 66% of the original 200dp
+private val RailCollapsedWidth = 60.dp   // 75% of the original 80dp
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -333,9 +331,9 @@ private fun SideTabRail(
             // Entering the rail with the D-pad lands on the last focused tab (or the selected one)
             .focusRestorer(focusRequesters.getValue(selectedTab))
             .selectableGroup()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+        // Tab buttons are centered vertically on the rail
+        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)
     ) {
         Tab.entries.forEach { tab ->
             SideTabRailItem(
@@ -383,8 +381,8 @@ private fun SideTabRailItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(56.dp)
-            .clip(RoundedCornerShape(28.dp))
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
             .background(containerColor)
             .selectable(
                 selected = selected,
@@ -393,7 +391,7 @@ private fun SideTabRailItem(
                 role = Role.Tab,
                 onClick = onClick
             )
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -403,7 +401,7 @@ private fun SideTabRailItem(
             modifier = Modifier.size(24.dp)
         )
         if (expanded) {
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(10.dp))
             Text(
                 text = label,
                 color = contentColor,
