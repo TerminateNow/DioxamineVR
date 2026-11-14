@@ -323,6 +323,12 @@
     <string name="settings_adb_detect_localhost_subtitle">Check for an active local ADB server and prompt to connect</string>
     <string name="settings_adb_autoconnect_localhost_title">Auto-connect to Localhost</string>
     <string name="settings_adb_autoconnect_localhost_subtitle">Automatically connect when local ADB is detected without prompting</string>
+    <string name="settings_wireless_on_boot_title">Enable Wireless Debugging on Boot</string>
+    <string name="settings_wireless_on_boot_subtitle">Turn on Wireless debugging automatically after this device starts (Android 11+). Open the app once after a reboot if your device blocks background launches.</string>
+    <string name="settings_wireless_on_boot_needs_permission">Requires the WRITE_SECURE_SETTINGS permission, granted once over ADB.</string>
+    <string name="settings_wireless_grant_button">Grant permission via connected ADB device</string>
+    <string name="settings_wireless_grant_hint">Connect to this device\'s own ADB first (Discover Devices), then tap the button. Or run: adb shell pm grant io.github.rhythmcache.dioxamine android.permission.WRITE_SECURE_SETTINGS</string>
+    <string name="settings_wireless_grant_success">Permission granted</string>
     <string name="settings_adb_auth_section">Authentication Key</string>
     <string name="settings_key_desc">Manage the RSA key pair used to authorize this app with devices.</string>
     <string name="settings_fingerprint_label">Fingerprint:</string>

@@ -589,6 +589,34 @@ class AdbViewModel(
         }
     }
 
+    /**
+     * Grants this app WRITE_SECURE_SETTINGS by running `pm grant` over an ADB connection to the
+     * device the app itself is running on (needed to toggle wireless debugging at boot).
+     * [onResult] is invoked on the main thread with a user-facing message.
+     */
+    fun grantWriteSecureSettings(context: Context, onResult: (success: Boolean, message: String) -> Unit) {
+        val client = activeClient()
+        if (client == null) {
+            onResult(false, "No connected ADB device. Connect to this device's own ADB first.")
+            return
+        }
+        val pkg = context.packageName
+        viewModelScope.launch(Dispatchers.IO) {
+            val (ok, msg) = try {
+                val res = client.shell("pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
+                if (res.isSuccess) {
+                    true to "Permission granted"
+                } else {
+                    false to (res.stderr.toString(Charsets.UTF_8).ifBlank { res.stdoutText }.trim()
+                        .ifBlank { "pm grant failed (exit ${res.exitCode})" })
+                }
+            } catch (e: Exception) {
+                false to "Failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) { onResult(ok, msg) }
+        }
+    }
+
     fun switchTcpip(id: String, port: Int = 5555) {
         val conn = devices[id] ?: return
         val client = conn.client ?: return

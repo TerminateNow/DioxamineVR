@@ -67,6 +67,7 @@ import io.github.rhythmcache.dioxamine.core.AppTheme
 import io.github.rhythmcache.dioxamine.core.DioxForegroundService
 import io.github.rhythmcache.dioxamine.core.DeviceInfoCollector
 import io.github.rhythmcache.dioxamine.core.UpdateChecker
+import io.github.rhythmcache.dioxamine.core.WirelessDebugging
 import io.github.rhythmcache.dioxamine.plugin.PermissionPolicy
 import io.github.rhythmcache.dioxamine.plugin.PluginManifest
 import io.github.rhythmcache.dioxamine.plugin.PluginPermission
@@ -123,6 +124,12 @@ fun SettingsScreen(vm: AdbViewModel) {
     }
     var autoConnectLocalhost by remember {
         mutableStateOf(prefs.getBoolean("adb_autoconnect_localhost", false))
+    }
+    var wirelessOnBoot by remember {
+        mutableStateOf(prefs.getBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, false))
+    }
+    var secureSettingsGranted by remember {
+        mutableStateOf(WirelessDebugging.hasPermission(context))
     }
 
     DisposableEffect(Unit) {
@@ -528,6 +535,87 @@ fun SettingsScreen(vm: AdbViewModel) {
                                 enabled = detectLocalhost,
                                 interactionSource = switchRowFocus3,
                                 onCheckedChange = null)
+                        }
+
+                        if (WirelessDebugging.isSupported) {
+                            Spacer(Modifier.height(4.dp))
+
+                            val wirelessRowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                            Row(
+                                modifier = Modifier
+                                    .toggleable(
+                                        value = wirelessOnBoot,
+                                        enabled = secureSettingsGranted,
+                                        role = Role.Switch,
+                                        interactionSource = wirelessRowFocus,
+                                        indication = null,
+                                        onValueChange = { checked ->
+                                            wirelessOnBoot = checked
+                                            prefs.edit()
+                                                .putBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, checked)
+                                                .apply()
+                                            if (checked) {
+                                                WirelessDebugging.enable(context)
+                                            }
+                                        }
+                                    )
+                                    .fillMaxWidth()
+                                    .alpha(if (secureSettingsGranted) 1f else 0.38f)
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                    Text(
+                                        stringResource(R.string.settings_wireless_on_boot_title),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        stringResource(
+                                            if (secureSettingsGranted) {
+                                                R.string.settings_wireless_on_boot_subtitle
+                                            } else {
+                                                R.string.settings_wireless_on_boot_needs_permission
+                                            }
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = wirelessOnBoot && secureSettingsGranted,
+                                    enabled = secureSettingsGranted,
+                                    interactionSource = wirelessRowFocus,
+                                    onCheckedChange = null)
+                            }
+
+                            if (!secureSettingsGranted) {
+                                OutlinedButton(
+                                    onClick = {
+                                        vm.grantWriteSecureSettings(context) { ok, message ->
+                                            secureSettingsGranted = WirelessDebugging.hasPermission(context)
+                                            Toast.makeText(
+                                                context,
+                                                if (ok) {
+                                                    context.getString(R.string.settings_wireless_grant_success)
+                                                } else {
+                                                    message
+                                                },
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.settings_wireless_grant_button))
+                                }
+                                Text(
+                                    stringResource(R.string.settings_wireless_grant_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                         }
 
                         Spacer(Modifier.height(8.dp))
