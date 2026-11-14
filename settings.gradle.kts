@@ -24,6 +24,8 @@ dependencyResolutionManagement {
 rootProject.name = "Dioxamine"
 include(":app")
 include(":app-logger")
+include(":wireless-debug")
+include(":wireless-helper")
 include(":adb-kt")
 project(":adb-kt").projectDir = file("adb-kt/lib")
 include(":fastboot-kt")

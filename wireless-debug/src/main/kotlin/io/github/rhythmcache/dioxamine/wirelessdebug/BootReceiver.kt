@@ -1,5 +1,6 @@
-package io.github.rhythmcache.dioxamine.core
+package io.github.rhythmcache.dioxamine.wirelessdebug
 
+import io.github.rhythmcache.dioxamine.core.AppLogger
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent

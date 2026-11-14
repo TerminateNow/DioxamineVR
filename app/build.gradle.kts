@@ -140,6 +140,7 @@ dependencies {
     implementation(project(":fastboot-kt"))
     implementation(project(":terminal-view"))
     implementation(project(":app-logger"))
+    implementation(project(":wireless-debug"))
     implementation(libs.qrose)
 
     testImplementation(libs.junit)

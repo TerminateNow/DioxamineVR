@@ -69,7 +69,7 @@ import io.github.rhythmcache.dioxamine.core.AppTheme
 import io.github.rhythmcache.dioxamine.core.DioxForegroundService
 import io.github.rhythmcache.dioxamine.core.DeviceInfoCollector
 import io.github.rhythmcache.dioxamine.core.UpdateChecker
-import io.github.rhythmcache.dioxamine.core.WirelessDebugging
+import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
 import io.github.rhythmcache.dioxamine.plugin.PermissionPolicy
 import io.github.rhythmcache.dioxamine.plugin.PluginManifest
 import io.github.rhythmcache.dioxamine.plugin.PluginPermission

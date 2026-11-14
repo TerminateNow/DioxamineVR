@@ -14,6 +14,7 @@ Requires JDK 17+, Android SDK (compileSdk 37), and the Android NDK (`ANDROID_NDK
 ./gradlew assembleDebug            # debug APK -> app/build/outputs/apk/debug
 ./gradlew testDebugUnitTest        # all JVM unit tests (what CI runs)
 ./gradlew :app:testDebugUnitTest --tests "io.github.rhythmcache.dioxamine.plugin.PluginManifestTest"   # single test class
+./gradlew :wireless-helper:assembleDebug   # headset helper APK only (skips :app's asset generation)
 ./gradlew ktlintCheck              # lint (org.jlleitschuh ktlint plugin on :app)
 ./gradlew ktlintFormat
 ```
@@ -30,7 +31,7 @@ Release builds (`assembleRelease`) are minified and read signing config from env
 
 ## Module layout
 
-Gradle modules (see `settings.gradle.kts`): `:app`, `:app-logger` (the `AppLogger` object), `:adb-kt` (project dir is `adb-kt/lib`), `:fastboot-kt` (project dir is `fastboot-kt/lib`), `:terminal-emulator` and `:terminal-view` (vendored Termux terminal). `adb-kt` and `fastboot-kt` are vendored copies of standalone libraries (each has its own Gradle wrapper, README, CI); changes there are library changes, so keep them API-compatible with the app.
+Gradle modules (see `settings.gradle.kts`): `:app`, `:app-logger` (the `AppLogger` object), `:adb-kt` (project dir is `adb-kt/lib`), `:fastboot-kt` (project dir is `fastboot-kt/lib`), `:terminal-emulator` and `:terminal-view` (vendored Termux terminal), `:wireless-debug` (library: `WirelessDebugging` + `BootReceiver` that turn on Wireless debugging at boot; its manifest contributes `WRITE_SECURE_SETTINGS`, `RECEIVE_BOOT_COMPLETED` and the receiver to every app depending on it), and `:wireless-helper` (small standalone app for the VR headset, applicationId `io.github.rhythmcache.dioxamine.wirelesshelper`, one Compose status screen on top of `:wireless-debug`). `adb-kt` and `fastboot-kt` are vendored copies of standalone libraries (each has its own Gradle wrapper, README, CI); changes there are library changes, so keep them API-compatible with the app.
 
 `app/src/main/kotlin/io/github/rhythmcache/dioxamine/` is organised by feature:
 

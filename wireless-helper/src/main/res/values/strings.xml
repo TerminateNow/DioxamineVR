@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dioxamine Wireless Helper</string>
+    <string name="title">Wireless Debugging Helper</string>
+    <string name="status_supported">Android 11 or newer</string>
+    <string name="status_permission">WRITE_SECURE_SETTINGS granted</string>
+    <string name="status_enabled">Wireless debugging is on</string>
+    <string name="enable_on_boot_title">Enable on boot</string>
+    <string name="enable_on_boot_subtitle">Turn on Wireless debugging automatically after this device starts</string>
+    <string name="enable_now">Enable now</string>
+    <string name="refresh">Refresh</string>
+    <string name="enabled_toast">Wireless debugging enabled</string>
+    <string name="grant_title">Grant the permission once</string>
+    <string name="grant_desc">Run this from a PC, or from Dioxamine\'s ADB shell connected to this device, then tap Refresh:</string>
+    <string name="launch_once_note">Android only delivers the boot event to apps that have been opened at least once since install. Wireless debugging also needs a Wi-Fi connection.</string>
+</resources>
