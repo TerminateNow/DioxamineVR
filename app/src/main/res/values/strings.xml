@@ -530,6 +530,15 @@
     <!-- ADB Reboot Options Strings -->
     <string name="adb_reboot_tile_title">Reboot Options</string>
     <string name="adb_reboot_tile_desc">Reboot to system, bootloader, recovery, fastboot, or power off</string>
+    <string name="wireless_helper_tile_title">Install Wireless Debugging Helper</string>
+    <string name="wireless_helper_tile_desc">One tap: installs the helper on the connected device, grants its permission and opens it, so Wireless debugging turns on at every boot (Android 11+)</string>
+    <string name="wireless_helper_step_installing">Installing helper app…</string>
+    <string name="wireless_helper_step_granting">Granting WRITE_SECURE_SETTINGS…</string>
+    <string name="wireless_helper_step_launching">Opening the helper on the device…</string>
+    <string name="wireless_helper_done_title">Helper ready</string>
+    <string name="wireless_helper_done_msg">The helper is installed, has its permission and is open on the device. Wireless debugging will turn on automatically after every reboot.</string>
+    <string name="wireless_helper_done_not_launched_msg">The helper is installed and has its permission, but it could not be opened automatically. Open \"Dioxamine Wireless Helper\" once on the device so it runs at boot.</string>
+    <string name="wireless_helper_failed_title">Helper setup failed</string>
     <string name="adb_reboot_system_title">Reboot System</string>
     <string name="adb_reboot_system_desc">Normal reboot into the Android OS</string>
     <string name="adb_reboot_bootloader_title">Reboot to Bootloader</string>

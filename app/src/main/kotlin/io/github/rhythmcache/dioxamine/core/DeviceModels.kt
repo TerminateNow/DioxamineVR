@@ -135,6 +135,16 @@ suspend fun AdbClient.executeShell(command: String, supportsShellV2: Boolean): S
     }
 }
 
+enum class HelperInstallStep { INSTALLING, GRANTING, LAUNCHING }
+
+sealed class HelperInstallState {
+    object Idle : HelperInstallState()
+    data class Running(val step: HelperInstallStep, val progress: Float) : HelperInstallState()
+    /** [launched] is false when install and grant worked but `am start` did not. */
+    data class Success(val launched: Boolean) : HelperInstallState()
+    data class Error(val message: String) : HelperInstallState()
+}
+
 sealed class FlashUiState {
     object Idle : FlashUiState()
     data class Running(val percent: Float, val bytesTransferred: Long, val totalBytes: Long) : FlashUiState()

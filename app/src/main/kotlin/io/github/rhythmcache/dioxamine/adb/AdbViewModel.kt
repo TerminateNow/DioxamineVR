@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbDetector
 import io.github.rhythmcache.dioxamine.scrcpy.ScrcpyDiscoveryCache
+import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
 import java.io.File
 
 class AdbViewModel(
@@ -614,6 +615,111 @@ class AdbViewModel(
                 false to "Failed: ${e.message}"
             }
             withContext(Dispatchers.Main) { onResult(ok, msg) }
+        }
+    }
+
+    var helperInstallState by mutableStateOf<HelperInstallState>(HelperInstallState.Idle)
+        private set
+
+    private var helperInstallJob: Job? = null
+
+    /**
+     * One-tap setup of the headset helper on the active device: installs the helper APK bundled in
+     * this app's assets, grants it WRITE_SECURE_SETTINGS, and launches it once (Android only delivers
+     * BOOT_COMPLETED to apps that have been opened since install). Progress goes to [helperInstallState].
+     */
+    fun installWirelessHelper(context: Context) {
+        if (helperInstallState is HelperInstallState.Running) return
+        val client = activeClient()
+        if (client == null) {
+            helperInstallState = HelperInstallState.Error("No connected ADB device.")
+            return
+        }
+        val apiLevel = activeDeviceId?.let { devices[it]?.apiLevel }
+        if (apiLevel != null && apiLevel < 30) {
+            helperInstallState = HelperInstallState.Error(
+                "Wireless debugging needs Android 11 or newer on the connected device (it reports API $apiLevel)."
+            )
+            return
+        }
+        val appContext = context.applicationContext
+        helperInstallJob = viewModelScope.launch(Dispatchers.IO) {
+            val apk = File(appContext.cacheDir, WirelessDebugging.HELPER_ASSET)
+            try {
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.INSTALLING, 0f)
+                }
+                appContext.assets.open(WirelessDebugging.HELPER_ASSET).use { input ->
+                    apk.outputStream().use { input.copyTo(it) }
+                }
+                suspend fun installApk() {
+                    // -r: replace an existing install, -d: allow a lower versionCode.
+                    client.install.install(apk, flags = listOf("-r", "-d")).collect { progress ->
+                        withContext(Dispatchers.Main) {
+                            helperInstallState = HelperInstallState.Running(
+                                HelperInstallStep.INSTALLING,
+                                progress.percentage / 100f
+                            )
+                        }
+                    }
+                }
+                try {
+                    installApk()
+                } catch (e: AdbException) {
+                    // A helper signed with a different key (e.g. from a CI artifact) can't be
+                    // updated in place; it only holds one preference, so replace it.
+                    if (e.message?.contains("UPDATE_INCOMPATIBLE") != true) throw e
+                    AppLogger.i("ADB_VM", "Helper signature mismatch; uninstalling old helper and retrying")
+                    client.shell("pm uninstall ${WirelessDebugging.HELPER_PACKAGE}")
+                    installApk()
+                }
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.GRANTING, 1f)
+                }
+                val grant = client.shell(
+                    "pm grant ${WirelessDebugging.HELPER_PACKAGE} android.permission.WRITE_SECURE_SETTINGS"
+                )
+                if (!grant.isSuccess) {
+                    val msg = grant.stderr.toString(Charsets.UTF_8).ifBlank { grant.stdoutText }.trim()
+                    throw IllegalStateException("Installed, but granting the permission failed: $msg")
+                }
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.LAUNCHING, 1f)
+                }
+                val launch = client.shell(
+                    "am start -n ${WirelessDebugging.HELPER_PACKAGE}/${WirelessDebugging.HELPER_ACTIVITY}"
+                )
+                val launchOut = (launch.stdoutText + launch.stderr.toString(Charsets.UTF_8)).trim()
+                val launched = launch.isSuccess && !launchOut.contains("Error", ignoreCase = true)
+                if (!launched) {
+                    AppLogger.w("ADB_VM", "Helper launch output: $launchOut")
+                }
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Success(launched)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.io.FileNotFoundException) {
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Error("This build does not include the helper APK.")
+                }
+            } catch (e: Exception) {
+                AppLogger.e("ADB_VM", "Helper install failed", e)
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Error(e.message ?: e.toString())
+                }
+            } finally {
+                apk.delete()
+            }
+        }
+    }
+
+    fun dismissHelperInstall() {
+        if (helperInstallState !is HelperInstallState.Running) {
+            helperInstallState = HelperInstallState.Idle
         }
     }
 

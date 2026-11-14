@@ -19,6 +19,13 @@ object WirelessDebugging {
 
     const val PREF_ENABLE_ON_BOOT = "wireless_debug_on_boot"
 
+    /** The standalone headset helper app (`:wireless-helper`), installed by Dioxamine over ADB. */
+    const val HELPER_PACKAGE = "io.github.rhythmcache.dioxamine.wirelesshelper"
+    const val HELPER_ACTIVITY = "$HELPER_PACKAGE.HelperActivity"
+
+    /** Asset name of the helper APK bundled inside Dioxamine at build time. */
+    const val HELPER_ASSET = "wireless-helper.apk"
+
     private const val SETTING_ADB_ENABLED = "adb_enabled"
     private const val SETTING_ADB_WIFI_ENABLED = "adb_wifi_enabled"
 

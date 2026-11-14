@@ -30,6 +30,7 @@ import io.github.rhythmcache.dioxamine.adb.builtin.screencap.ScreencapScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.screencap.ScreencapTile
 import io.github.rhythmcache.dioxamine.adb.builtin.touchpad.TouchpadScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.touchpad.TouchpadTile
+import io.github.rhythmcache.dioxamine.adb.builtin.wirelesshelper.WirelessHelperTile
 
 sealed class BuiltInSubScreen {
     object TilesList : BuiltInSubScreen()
@@ -133,6 +134,9 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Reboot }
                     )
+                }
+                item {
+                    WirelessHelperTile(vm = vm, isConnected = isConnected)
                 }
             }
         }
