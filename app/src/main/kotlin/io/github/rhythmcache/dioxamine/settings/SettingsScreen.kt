@@ -2,6 +2,8 @@ package io.github.rhythmcache.dioxamine.settings
 
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.selection.toggleable
 import io.github.rhythmcache.dioxamine.ui.tv.Button
@@ -130,6 +132,17 @@ fun SettingsScreen(vm: AdbViewModel) {
     }
     var secureSettingsGranted by remember {
         mutableStateOf(WirelessDebugging.hasPermission(context))
+    }
+    // The grant button disappears once the permission is granted; if it held D-pad focus,
+    // focus would be lost. Move it onto the now-enabled toggle row instead.
+    val wirelessRowFocusRequester = remember { FocusRequester() }
+    var refocusWirelessRow by remember { mutableStateOf(false) }
+    LaunchedEffect(refocusWirelessRow, secureSettingsGranted) {
+        if (refocusWirelessRow && secureSettingsGranted) {
+            withFrameNanos { } // wait one frame so the row is enabled and focusable
+            runCatching { wirelessRowFocusRequester.requestFocus() }
+            refocusWirelessRow = false
+        }
     }
 
     DisposableEffect(Unit) {
@@ -543,6 +556,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                             val wirelessRowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                             Row(
                                 modifier = Modifier
+                                    .focusRequester(wirelessRowFocusRequester)
                                     .toggleable(
                                         value = wirelessOnBoot,
                                         enabled = secureSettingsGranted,
@@ -594,6 +608,7 @@ fun SettingsScreen(vm: AdbViewModel) {
                                     onClick = {
                                         vm.grantWriteSecureSettings(context) { ok, message ->
                                             secureSettingsGranted = WirelessDebugging.hasPermission(context)
+                                            if (secureSettingsGranted) refocusWirelessRow = true
                                             Toast.makeText(
                                                 context,
                                                 if (ok) {
