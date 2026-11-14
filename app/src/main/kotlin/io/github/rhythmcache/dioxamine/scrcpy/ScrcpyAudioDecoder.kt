@@ -206,6 +206,7 @@ class ScrcpyAudioDecoder {
                     AppLogger.w(TAG, "ScrcpyAudioDecoder: Stream EOF while reading payload ($payloadSize bytes)")
                     break
                 }
+                ScrcpyStreamStats.audioBytes.addAndGet(payloadSize + 12L)
 
                 if (isRaw) {
                     audioTrack?.write(payloadBuffer, 0, payloadSize)

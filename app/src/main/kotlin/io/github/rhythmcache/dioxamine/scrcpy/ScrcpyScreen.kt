@@ -1,5 +1,17 @@
 package io.github.rhythmcache.dioxamine.scrcpy
 
+import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
+import io.github.rhythmcache.dioxamine.ui.tv.Button
+import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedTextField
+import io.github.rhythmcache.dioxamine.ui.tv.Switch
+import io.github.rhythmcache.dioxamine.ui.tv.TextButton
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
@@ -10,6 +22,7 @@ import android.view.SurfaceView
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import android.graphics.Bitmap
 import android.os.Handler
@@ -89,7 +102,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlin.math.roundToInt
 
-private enum class ScrcpyTab { CONFIGURATOR, LOGS, RECORDINGS }
+private enum class ScrcpyTab { CONFIGURATOR, RECORDINGS, LOGS }
 private enum class AddCustomDialogType { MAX_SIZE, FPS, BITRATE, AUDIO_BITRATE, DPI }
 private enum class ControlSide { LEFT, TOP, RIGHT, BOTTOM }
 private enum class DiscoveryState { IDLE, LOADING, SUCCESS, EMPTY, TIMED_OUT, FAILED }
@@ -177,9 +190,6 @@ fun ScrcpyScreen(
     val isRecording = scrcpyVm.isRecording
     var isFullScreen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = isFullScreen) {
-        isFullScreen = false
-    }
     var selectedTab by remember(isDeviceConnected) {
         mutableStateOf(if (isDeviceConnected) ScrcpyTab.CONFIGURATOR else ScrcpyTab.RECORDINGS)
     }
@@ -421,6 +431,7 @@ fun ScrcpyScreen(
         )
         scrcpyVm.activeSession = session
         scrcpyVm.isMirroring = true
+        ScrcpyStreamStats.reset()
         session.start(holder)
     }
 
@@ -433,515 +444,576 @@ fun ScrcpyScreen(
         }
     }
 
-    val fixedPlayerHeight = 280.dp
+    // ---- Mirrored device volume (media stream) via `cmd media_session volume` ----
+    var remoteVolume by remember { mutableStateOf<Int?>(null) }
+    var remoteVolumeMax by remember { mutableStateOf<Int?>(null) }
+    var pendingRemoteVolume by remember { mutableStateOf<Int?>(null) }
+    val volumeClient = client
+    LaunchedEffect(isMirroring, volumeClient) {
+        remoteVolume = null
+        remoteVolumeMax = null
+        if (isMirroring && volumeClient != null) {
+            val parsed = runCatching {
+                withContext(Dispatchers.IO) {
+                    val r = volumeClient.shell("cmd media_session volume --stream 3 --get")
+                    r.stdoutText + "\n" + r.stderrText
+                }
+            }.getOrNull()?.let { parseMediaSessionVolume(it) }
+            if (parsed != null) {
+                remoteVolume = parsed.first
+                remoteVolumeMax = parsed.second
+            }
+        }
+    }
+    // Debounced so holding Up/Down doesn't flood the device with shell commands.
+    LaunchedEffect(pendingRemoteVolume) {
+        val target = pendingRemoteVolume ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(120)
+        val c = volumeClient ?: return@LaunchedEffect
+        runCatching { withContext(Dispatchers.IO) { c.shell("cmd media_session volume --stream 3 --set $target") } }
+    }
+    fun setRemoteVolume(level: Int) {
+        val max = remoteVolumeMax ?: return
+        val v = level.coerceIn(0, max)
+        remoteVolume = v
+        pendingRemoteVolume = v
+    }
+    fun stepRemoteVolume(delta: Int) {
+        val cur = remoteVolume
+        if (cur != null && remoteVolumeMax != null) {
+            setRemoteVolume(cur + delta)
+        } else {
+            // Absolute volume unavailable: fall back to volume key presses on the device.
+            val key = if (delta > 0) KeyEvent.KEYCODE_VOLUME_UP else KeyEvent.KEYCODE_VOLUME_DOWN
+            activeSession?.sendKeycode(0, key)
+            activeSession?.sendKeycode(1, key)
+        }
+    }
+    // Mute toggle (Right while the volume slider is active). Remembers the level to restore.
+    var preMuteVolume by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(isMirroring) { if (!isMirroring) preMuteVolume = null }
+    fun toggleRemoteMute() {
+        val cur = remoteVolume
+        val max = remoteVolumeMax
+        if (cur != null && max != null) {
+            if (cur > 0) {
+                preMuteVolume = cur
+                setRemoteVolume(0)
+            } else {
+                setRemoteVolume((preMuteVolume ?: (max / 2)).coerceAtLeast(1))
+                preMuteVolume = null
+            }
+        } else {
+            // Absolute volume unavailable: toggle with the device's mute key.
+            activeSession?.sendKeycode(0, KeyEvent.KEYCODE_VOLUME_MUTE)
+            activeSession?.sendKeycode(1, KeyEvent.KEYCODE_VOLUME_MUTE)
+        }
+    }
+
+    // Double-press Back while mirroring: first press shows a hint for 3 s, second press stops
+    // mirroring and returns to the Settings tab. (An expanded control overlay closes first.)
+    var backExitArmed by remember { mutableStateOf(false) }
+    var backArmToken by remember { mutableIntStateOf(0) }
+    LaunchedEffect(backArmToken) {
+        if (backExitArmed) {
+            kotlinx.coroutines.delay(3000)
+            backExitArmed = false
+        }
+    }
+    // Mirroring always plays fullscreen.
+    // When a stream ends for any reason (stop button, double Back, or a dropped connection)
+    // the player and whatever control had focus are removed, so focus is put back on the
+    // page explicitly; otherwise the D-pad has nothing to move from until Back is pressed.
+    val startButtonFocus = remember { FocusRequester() }
+    val pageFocus = remember { FocusRequester() }
+    var wasMirroring by remember { mutableStateOf(false) }
+    LaunchedEffect(isMirroring) {
+        isFullScreen = isMirroring
+        val streamEnded = wasMirroring && !isMirroring
+        wasMirroring = isMirroring
+        if (!isMirroring) backExitArmed = false
+        if (streamEnded) {
+            selectedTab = ScrcpyTab.CONFIGURATOR
+            kotlinx.coroutines.delay(150)
+            runCatching {
+                if (isDeviceConnected && isModeSupported) startButtonFocus.requestFocus()
+                else pageFocus.requestFocus()
+            }
+        }
+    }
+    BackHandler(enabled = isMirroring) {
+        if (backExitArmed) {
+            backExitArmed = false
+            stopMirroring()
+            selectedTab = ScrcpyTab.CONFIGURATOR
+        } else {
+            backExitArmed = true
+            backArmToken++
+        }
+    }
+
     val scrollState = rememberScrollState()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        if (isMirroring) {
             Box(
-                modifier = if (isFullScreen) {
-                    Modifier.fillMaxSize().background(Color.Black)
-                } else {
-                    Modifier
-                        .fillMaxWidth()
-                        .height(fixedPlayerHeight)
-                        .background(Color.Black)
-                },
+                modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                if (isMirroring) {
-                    if (config.videoEnabled) {
-                        ScrcpyVideoPlayer(
-                            modifier = Modifier.fillMaxSize(),
-                            session = activeSession,
-                            videoWidth = videoWidth,
-                            videoHeight = videoHeight,
-                            isFullScreen = isFullScreen,
-                            showFloatingNav = scrcpyVm.showFloatingNav && config.videoSource != "camera",
-                            onToggleFloatingNav = {
-                                if (config.videoSource != "camera") {
-                                    val next = !scrcpyVm.showFloatingNav
-                                    scrcpyVm.showFloatingNav = next
-                                    config = config.copy(showFloatingNav = next)
-                                    if (rememberSettings && deviceKey != null) {
-                                        ScrcpyConfigStore.save(context, deviceKey, config)
-                                    }
-                                }
-                            },
-                            showTouchpadOverlay = scrcpyVm.showTouchpadOverlay && config.videoSource != "camera",
-                            onToggleTouchpadOverlay = {
-                                if (config.videoSource != "camera") {
-                                    val next = !scrcpyVm.showTouchpadOverlay
-                                    scrcpyVm.showTouchpadOverlay = next
-                                    config = config.copy(showTouchpad = next)
-                                    if (next) activeSession?.ensureUhidDevices()
-                                    if (rememberSettings && deviceKey != null) {
-                                        ScrcpyConfigStore.save(context, deviceKey, config)
-                                    }
-                                }
-                            },
-                            showKeyboard = scrcpyVm.showKeyboard && config.videoSource != "camera",
-                            onToggleKeyboard = { next ->
-                                if (config.videoSource != "camera") {
-                                    scrcpyVm.showKeyboard = next
-                                    config = config.copy(showKeyboard = next)
-                                    if (next) activeSession?.ensureUhidDevices()
-                                    if (rememberSettings && deviceKey != null) {
-                                        ScrcpyConfigStore.save(context, deviceKey, config)
-                                    }
-                                }
-                            },
-                            bindVolumeKeys = config.bindVolumeKeys,
-                            videoSourceIsCamera = config.videoSource == "camera",
-                            torchOn = torchOn,
-                            isRecording = isRecording,
-                            canRecord = canRecord,
-                            onToggleRecord = { toggleRecording() },
-                            onToggleTorch = {
-                                scrcpyVm.torchOn = !torchOn
-                                activeSession?.sendCameraSetTorch(scrcpyVm.torchOn)
-                            },
-                            onToggleFullScreen = { isFullScreen = !isFullScreen },
-                            onRotateDevice = { activeSession?.sendRotateDevice() },
-                            onPasteClipboard = if (config.controlEnabled && config.videoSource != "camera") {
-                                {
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    val clip = cm?.primaryClip
-                                    if (clip != null && clip.itemCount > 0) {
-                                        val text = clip.getItemAt(0)?.text?.toString()
-                                        if (!text.isNullOrEmpty()) {
-                                            activeSession?.sendSetClipboard(text, paste = true)
-                                        }
-                                    }
-                                }
-                            } else null,
-                            onStop = { stopMirroring() },
-                            onNavBack = { activeSession?.sendNavBack() },
-                            onNavHome = { activeSession?.sendNavHome() },
-                            onNavRecents = { activeSession?.sendNavRecents() },
-                            onKeyEvent = { action, keyCode ->
-                                activeSession?.sendKeycode(action, keyCode)
-                            },
-                            onTouchEvent = { action, pointerId, x, y, vw, vh ->
-                                if (config.videoSource != "camera") {
-                                    activeSession?.sendTouchEvent(action, pointerId, x, y, vw, vh)
-                                }
-                            },
-                            onSurfaceCreated = { holder ->
-                                val existingSession = activeSession
-                                if (existingSession != null && isMirroring) {
-                                    existingSession.attachSurface(holder.surface)
-                                } else {
-                                    startMirroring(holder)
-                                }
-                            },
-                            onSurfaceDestroyed = {
-                                activeSession?.detachSurface()
+            if (config.videoEnabled) {
+                ScrcpyVideoPlayer(
+                    modifier = Modifier.fillMaxSize(),
+                    session = activeSession,
+                    videoWidth = videoWidth,
+                    videoHeight = videoHeight,
+                    isFullScreen = isFullScreen,
+                    showFloatingNav = scrcpyVm.showFloatingNav && config.videoSource != "camera",
+                    onToggleFloatingNav = {
+                        if (config.videoSource != "camera") {
+                            val next = !scrcpyVm.showFloatingNav
+                            scrcpyVm.showFloatingNav = next
+                            config = config.copy(showFloatingNav = next)
+                            if (rememberSettings && deviceKey != null) {
+                                ScrcpyConfigStore.save(context, deviceKey, config)
                             }
-                        )
-                    } else {
-                        ScrcpyAudioOnlyPlayer(
-                            modifier = Modifier.fillMaxSize(),
-                            config = config,
-                            isRecording = isRecording,
-                            canRecord = canRecord,
-                            onToggleRecord = { toggleRecording() },
-                            onStop = { stopMirroring() }
-                        )
-                    }
-                } else if (errorMessage != null) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Filled.ErrorOutline,
-                            contentDescription = null,
-                            modifier = Modifier.size(44.dp),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.scrcpy_mirroring_failed),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            errorMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        TextButton(onClick = { scrcpyVm.errorMessage = null }) {
-                            Text(stringResource(R.string.btn_dismiss), color = MaterialTheme.colorScheme.error)
                         }
-                    }
-                } else if (!isDeviceConnected) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(24.dp)
+                    },
+                    showTouchpadOverlay = scrcpyVm.showTouchpadOverlay && config.videoSource != "camera",
+                    onToggleTouchpadOverlay = {
+                        if (config.videoSource != "camera") {
+                            val next = !scrcpyVm.showTouchpadOverlay
+                            scrcpyVm.showTouchpadOverlay = next
+                            config = config.copy(showTouchpad = next)
+                            if (next) activeSession?.ensureUhidDevices()
+                            if (rememberSettings && deviceKey != null) {
+                                ScrcpyConfigStore.save(context, deviceKey, config)
+                            }
+                        }
+                    },
+                    showKeyboard = scrcpyVm.showKeyboard && config.videoSource != "camera",
+                    onToggleKeyboard = { next ->
+                        if (config.videoSource != "camera") {
+                            scrcpyVm.showKeyboard = next
+                            config = config.copy(showKeyboard = next)
+                            if (next) activeSession?.ensureUhidDevices()
+                            if (rememberSettings && deviceKey != null) {
+                                ScrcpyConfigStore.save(context, deviceKey, config)
+                            }
+                        }
+                    },
+                    bindVolumeKeys = config.bindVolumeKeys,
+                    videoSourceIsCamera = config.videoSource == "camera",
+                    torchOn = torchOn,
+                    isRecording = isRecording,
+                    canRecord = canRecord,
+                    onToggleRecord = { toggleRecording() },
+                    onToggleTorch = {
+                        scrcpyVm.torchOn = !torchOn
+                        activeSession?.sendCameraSetTorch(scrcpyVm.torchOn)
+                    },
+                    onToggleFullScreen = { },
+                    onRotateDevice = { activeSession?.sendRotateDevice() },
+                    onPasteClipboard = if (config.controlEnabled && config.videoSource != "camera") {
+                        {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val clip = cm?.primaryClip
+                            if (clip != null && clip.itemCount > 0) {
+                                val text = clip.getItemAt(0)?.text?.toString()
+                                if (!text.isNullOrEmpty()) {
+                                    activeSession?.sendSetClipboard(text, paste = true)
+                                }
+                            }
+                        }
+                    } else null,
+                    onStop = { stopMirroring() },
+                    onNavBack = { activeSession?.sendNavBack() },
+                    onNavHome = { activeSession?.sendNavHome() },
+                    onNavRecents = { activeSession?.sendNavRecents() },
+                    onKeyEvent = { action, keyCode ->
+                        activeSession?.sendKeycode(action, keyCode)
+                    },
+                    onTouchEvent = { action, pointerId, x, y, vw, vh ->
+                        if (config.videoSource != "camera") {
+                            activeSession?.sendTouchEvent(action, pointerId, x, y, vw, vh)
+                        }
+                    },
+                    onSurfaceCreated = { holder ->
+                        val existingSession = activeSession
+                        if (existingSession != null && isMirroring) {
+                            existingSession.attachSurface(holder.surface)
+                        } else {
+                            startMirroring(holder)
+                        }
+                    },
+                    onSurfaceDestroyed = {
+                        activeSession?.detachSurface()
+                    },
+                    remoteVolume = remoteVolume,
+                    remoteVolumeMax = remoteVolumeMax,
+                    onRemoteVolumeStep = { stepRemoteVolume(it) },
+                    onRemoteVolumeSet = { setRemoteVolume(it) },
+                    onRemoteVolumeMuteToggle = { toggleRemoteMute() }
+                )
+            } else {
+                ScrcpyAudioOnlyPlayer(
+                    modifier = Modifier.fillMaxSize(),
+                    config = config,
+                    isRecording = isRecording,
+                    canRecord = canRecord,
+                    onToggleRecord = { toggleRecording() },
+                    onStop = { stopMirroring() }
+                )
+            }
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = backExitArmed,
+                    enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(150)),
+                    exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(450)),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 48.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = Color.Black.copy(alpha = 0.8f),
+                        contentColor = Color.White
                     ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ScreenShare,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                        )
-                        Spacer(Modifier.height(8.dp))
                         Text(
-                            stringResource(R.string.scrcpy_no_device_title),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.scrcpy_no_device_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.7f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                } else if (!isModeSupported) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(24.dp)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ScreenShare,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.scrcpy_mode_not_supported, unsupportedModeName),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.scrcpy_mode_not_supported_desc, unsupportedModeName),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.7f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                } else {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ScreenShare,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.scrcpy_mirroring_idle),
+                            stringResource(R.string.scrcpy_back_again_to_exit),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
                         )
                     }
                 }
             }
-            if (!isFullScreen) {
-                Box(
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .focusRequester(pageFocus)
+                    .focusGroup()
+            ) {
+                // Title bar: mirror device on the left, compact Start button on the right
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .background(MaterialTheme.colorScheme.background)
+                        .padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Text(stringResource(R.string.scrcpy_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                        Text(
-                            if (activeConn?.androidVersion != null) {
-                                stringResource(R.string.scrcpy_target_version, activeConn.label, activeConn.androidVersion)
-                            } else if (activeConn != null) {
-                                stringResource(R.string.scrcpy_target, activeConn.label)
+                    Text(
+                        if (activeConn?.androidVersion != null) {
+                            stringResource(R.string.scrcpy_target_version, activeConn.label, activeConn.androidVersion)
+                        } else if (activeConn != null) {
+                            stringResource(R.string.scrcpy_target, activeConn.label)
+                        } else {
+                            stringResource(R.string.no_devices_connected)
+                        },
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Button(
+                        onClick = {
+                        scrcpyVm.errorMessage = null
+                        if (isMirroring) {
+                            stopMirroring()
+                        } else {
+                            if (rememberSettings && deviceKey != null) {
+                                ScrcpyConfigStore.save(context, deviceKey, config)
+                            }
+                            if (config.videoEnabled) {
+                                scrcpyVm.isMirroring = true
                             } else {
-                                stringResource(R.string.no_devices_connected)
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        val disabledTabColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-
-                        PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
-                            Tab(
-                                selected = selectedTab == ScrcpyTab.CONFIGURATOR,
-                                onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.CONFIGURATOR },
-                                enabled = isDeviceConnected,
-                                unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
-                                text = {
-                                    Text(
-                                        text = stringResource(R.string.scrcpy_tab_configurator),
-                                        color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
-                                    )
-                                },
-                            )
-                            Tab(
-                                selected = selectedTab == ScrcpyTab.LOGS,
-                                onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.LOGS },
-                                enabled = isDeviceConnected,
-                                unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
-                                text = {
-                                    Text(
-                                        text = stringResource(R.string.scrcpy_tab_logs),
-                                        color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
-                                    )
-                                },
-                            )
-                            Tab(
-                                selected = selectedTab == ScrcpyTab.RECORDINGS,
-                                onClick = { selectedTab = ScrcpyTab.RECORDINGS },
-                                text = { Text(stringResource(R.string.scrcpy_tab_recordings)) },
-                            )
+                                scrcpyVm.isMirroring = true
+                                startMirroring(null)
+                            }
                         }
+                    },
+                        enabled = isDeviceConnected && isModeSupported,
+                        modifier = Modifier.focusRequester(startButtonFocus),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            if (isMirroring) Icons.Filled.Stop else io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.VrHeadset,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isMirroring) stringResource(R.string.scrcpy_stop_mirroring) else stringResource(R.string.scrcpy_start_mirroring))
+                    }
+                }
 
-                        when (selectedTab) {
-                            ScrcpyTab.CONFIGURATOR -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .verticalScroll(scrollState)
-                                        .padding(16.dp)
-                                ) {
-                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                        Column(modifier = Modifier.padding(16.dp)) {
-                                            VideoSettings(
-                                                config = config,
-                                                isMirroring = isMirroring,
-                                                supportsAudio = supportsAudio,
-                                                supportsCamera = supportsCamera,
-                                                supportsVirtual = supportsVirtual,
-                                                apiLevel = apiLevel,
-                                                allowCustomValues = allowCustomValues,
-                                                customMaxSizes = customMaxSizes,
-                                                customFps = customFps,
-                                                customBitrates = customBitrates,
-                                                customDpis = customDpis,
-                                                discoveredCameras = discoveredCameras,
-                                                cameraDiscoveryState = cameraDiscoveryState,
-                                                discoveredApps = discoveredApps,
-                                                appDiscoveryState = appDiscoveryState,
-                                                onRefreshCameras = {
-                                                    activeId?.let { ScrcpyDiscoveryCache.clearCameras(it) }
-                                                    discoveredCameras = emptyList()
-                                                    if (supportsCamera && config.videoSource == "camera") {
-                                                        cameraDiscoveryState = DiscoveryState.LOADING
-                                                    }
-                                                    refreshCamerasTrigger++
-                                                },
-                                                onRefreshApps = {
-                                                    activeId?.let { ScrcpyDiscoveryCache.clearApps(it) }
-                                                    discoveredApps = emptyList()
-                                                    if (supportsVirtual && config.videoSource == "virtual") {
-                                                        appDiscoveryState = DiscoveryState.LOADING
-                                                    }
-                                                    refreshAppsTrigger++
-                                                },
-                                                onConfigChange = { config = it },
-                                                onOpenAddDialog = { type ->
-                                                    activeAddDialog = type
-                                                    dialogInputValue = ""
-                                                    dialogErrorMsg = null
-                                                }
-                                            )
+                if (isDeviceConnected && !isModeSupported) {
+                    Text(
+                        stringResource(R.string.scrcpy_mode_not_supported, unsupportedModeName),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                    )
+                }
 
-                                            Spacer(Modifier.height(12.dp))
-                                            HorizontalDivider()
-                                            Spacer(Modifier.height(12.dp))
-
-                                            AudioSettings(
-                                                config = config,
-                                                isMirroring = isMirroring,
-                                                supportsAudio = supportsAudio,
-                                                apiLevel = apiLevel,
-                                                allowCustomValues = allowCustomValues,
-                                                customAudioBitrates = customAudioBitrates,
-                                                onConfigChange = { config = it },
-                                                onOpenAddDialog = { type ->
-                                                    activeAddDialog = type
-                                                    dialogInputValue = ""
-                                                    dialogErrorMsg = null
-                                                }
-                                            )
-
-                                            Spacer(Modifier.height(12.dp))
-                                            HorizontalDivider()
-                                            Spacer(Modifier.height(12.dp))
-
-                                            DisplaySettings(
-                                                config = config,
-                                                isMirroring = isMirroring,
-                                                showFloatingNav = scrcpyVm.showFloatingNav,
-                                                showTouchpadOverlay = scrcpyVm.showTouchpadOverlay,
-                                                showKeyboard = scrcpyVm.showKeyboard,
-                                                onShowFloatingNavChange = { next ->
-                                                    if (config.videoEnabled && config.videoSource != "camera") {
-                                                        scrcpyVm.showFloatingNav = next
-                                                        config = config.copy(showFloatingNav = next)
-                                                        if (rememberSettings && deviceKey != null) {
-                                                            ScrcpyConfigStore.save(context, deviceKey, config)
-                                                        }
-                                                    }
-                                                },
-                                                onShowTouchpadChange = { next ->
-                                                    if (config.videoEnabled && config.videoSource != "camera") {
-                                                        scrcpyVm.showTouchpadOverlay = next
-                                                        config = config.copy(showTouchpad = next)
-                                                        if (next) activeSession?.ensureUhidDevices()
-                                                        if (rememberSettings && deviceKey != null) {
-                                                            ScrcpyConfigStore.save(context, deviceKey, config)
-                                                        }
-                                                    }
-                                                },
-                                                onShowKeyboardChange = { next ->
-                                                    if (config.videoEnabled && config.videoSource != "camera") {
-                                                        scrcpyVm.showKeyboard = next
-                                                        config = config.copy(showKeyboard = next)
-                                                        if (next) activeSession?.ensureUhidDevices()
-                                                        if (rememberSettings && deviceKey != null) {
-                                                            ScrcpyConfigStore.save(context, deviceKey, config)
-                                                        }
-                                                    }
-                                                },
-                                                onConfigChange = {
-                                                    config = it
-                                                    if (config.videoEnabled && config.videoSource != "camera") {
-                                                        activeSession?.clipboardSyncEnabled = it.clipboardSync
-                                                    }
-                                                    if (rememberSettings && deviceKey != null) {
-                                                        ScrcpyConfigStore.save(context, deviceKey, it)
-                                                    }
-                                                }
-                                            )
-
-                                            Spacer(Modifier.height(16.dp))
-
-                                            if (isDeviceConnected && deviceKey != null) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 4.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        modifier = Modifier
-                                                            .weight(1f)
-                                                            .clickable(enabled = !isMirroring) {
-                                                                val next = !rememberSettings
-                                                                rememberSettings = next
-                                                                ScrcpyConfigStore.setRememberEnabled(context, deviceKey, next)
-                                                                if (!next) {
-                                                                    ScrcpyConfigStore.resetToDefaults(context, deviceKey)
-                                                                }
-                                                            }
-                                                    ) {
-                                                        Checkbox(
-                                                            checked = rememberSettings,
-                                                            onCheckedChange = { checked ->
-                                                                rememberSettings = checked
-                                                                ScrcpyConfigStore.setRememberEnabled(context, deviceKey, checked)
-                                                                if (!checked) {
-                                                                    ScrcpyConfigStore.resetToDefaults(context, deviceKey)
-                                                                }
-                                                            },
-                                                            enabled = !isMirroring
-                                                        )
-                                                        Spacer(Modifier.width(4.dp))
-                                                        Text(
-                                                            text = stringResource(R.string.scrcpy_remember_settings),
-                                                            style = MaterialTheme.typography.bodyMedium
-                                                        )
-                                                    }
-
-                                                    TextButton(
-                                                        onClick = {
-                                                            config = ScrcpyConfig()
-                                                            ScrcpyConfigStore.resetToDefaults(context, deviceKey)
-                                                            Toast.makeText(context, context.getString(R.string.scrcpy_settings_reset), Toast.LENGTH_SHORT).show()
-                                                        },
-                                                        enabled = !isMirroring
-                                                    ) {
-                                                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                        Spacer(Modifier.width(4.dp))
-                                                        Text(stringResource(R.string.scrcpy_btn_reset_defaults))
-                                                    }
-                                                }
-
-                                                Spacer(Modifier.height(8.dp))
-                                            }
-
-                                            if (errorMessage != null) {
-                                                Text(errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                                                Spacer(Modifier.height(8.dp))
-                                            }
-
-                                            Button(
-                                                onClick = {
-                                                    scrcpyVm.errorMessage = null
-                                                    if (isMirroring) {
-                                                        stopMirroring()
-                                                    } else {
-                                                        if (rememberSettings && deviceKey != null) {
-                                                            ScrcpyConfigStore.save(context, deviceKey, config)
-                                                        }
-                                                        if (config.videoEnabled) {
-                                                            scrcpyVm.isMirroring = true
-                                                        } else {
-                                                            scrcpyVm.isMirroring = true
-                                                            startMirroring(null)
-                                                        }
-                                                    }
-                                                },
-                                                enabled = isDeviceConnected && isModeSupported,
-                                                shape = RoundedCornerShape(12.dp),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Icon(if (isMirroring) Icons.Filled.Stop else Icons.AutoMirrored.Filled.ScreenShare, contentDescription = null)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(if (isMirroring) stringResource(R.string.scrcpy_stop_mirroring) else stringResource(R.string.scrcpy_start_mirroring))
-                                            }
-                                        }
-                                    }
-                                }
+                if (errorMessage != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.ErrorOutline, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stringResource(R.string.scrcpy_mirroring_failed), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                Text(errorMessage, style = MaterialTheme.typography.bodySmall)
                             }
-                            ScrcpyTab.LOGS -> {
-                                ScrcpyLogViewer(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                                    activeConn = activeConn,
-                                    config = config
-                                )
-                            }
-                            ScrcpyTab.RECORDINGS -> {
-                                ScrcpyRecordingsViewer(
-                                    modifier = Modifier.fillMaxSize(),
-                                    isRecording = isRecording
-                                )
+                            TextButton(onClick = { scrcpyVm.errorMessage = null }) {
+                                Text(stringResource(R.string.btn_dismiss))
                             }
                         }
                     }
                 }
+
+                val disabledTabColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+
+                PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
+                    Tab(
+                        selected = selectedTab == ScrcpyTab.CONFIGURATOR,
+                        onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.CONFIGURATOR },
+                        enabled = isDeviceConnected,
+                        unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
+                        text = {
+                            Text(
+                                text = stringResource(R.string.scrcpy_tab_configurator),
+                                color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                            )
+                        },
+                    )
+                    Tab(
+                        selected = selectedTab == ScrcpyTab.RECORDINGS,
+                        onClick = { selectedTab = ScrcpyTab.RECORDINGS },
+                        text = { Text(stringResource(R.string.scrcpy_tab_recordings)) },
+                    )
+                    Tab(
+                        selected = selectedTab == ScrcpyTab.LOGS,
+                        onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.LOGS },
+                        enabled = isDeviceConnected,
+                        unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
+                        text = {
+                            Text(
+                                text = stringResource(R.string.scrcpy_tab_logs),
+                                color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                            )
+                        },
+                    )
+                }
+
+            when (selectedTab) {
+                ScrcpyTab.CONFIGURATOR -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(16.dp)
+                    ) {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                VideoSettings(
+                                    config = config,
+                                    isMirroring = isMirroring,
+                                    supportsAudio = supportsAudio,
+                                    supportsCamera = supportsCamera,
+                                    supportsVirtual = supportsVirtual,
+                                    apiLevel = apiLevel,
+                                    allowCustomValues = allowCustomValues,
+                                    customMaxSizes = customMaxSizes,
+                                    customFps = customFps,
+                                    customBitrates = customBitrates,
+                                    customDpis = customDpis,
+                                    discoveredCameras = discoveredCameras,
+                                    cameraDiscoveryState = cameraDiscoveryState,
+                                    discoveredApps = discoveredApps,
+                                    appDiscoveryState = appDiscoveryState,
+                                    onRefreshCameras = {
+                                        activeId?.let { ScrcpyDiscoveryCache.clearCameras(it) }
+                                        discoveredCameras = emptyList()
+                                        if (supportsCamera && config.videoSource == "camera") {
+                                            cameraDiscoveryState = DiscoveryState.LOADING
+                                        }
+                                        refreshCamerasTrigger++
+                                    },
+                                    onRefreshApps = {
+                                        activeId?.let { ScrcpyDiscoveryCache.clearApps(it) }
+                                        discoveredApps = emptyList()
+                                        if (supportsVirtual && config.videoSource == "virtual") {
+                                            appDiscoveryState = DiscoveryState.LOADING
+                                        }
+                                        refreshAppsTrigger++
+                                    },
+                                    onConfigChange = { config = it },
+                                    onOpenAddDialog = { type ->
+                                        activeAddDialog = type
+                                        dialogInputValue = ""
+                                        dialogErrorMsg = null
+                                    }
+                                )
+
+                                Spacer(Modifier.height(12.dp))
+                                HorizontalDivider()
+                                Spacer(Modifier.height(12.dp))
+
+                                AudioSettings(
+                                    config = config,
+                                    isMirroring = isMirroring,
+                                    supportsAudio = supportsAudio,
+                                    apiLevel = apiLevel,
+                                    allowCustomValues = allowCustomValues,
+                                    customAudioBitrates = customAudioBitrates,
+                                    onConfigChange = { config = it },
+                                    onOpenAddDialog = { type ->
+                                        activeAddDialog = type
+                                        dialogInputValue = ""
+                                        dialogErrorMsg = null
+                                    }
+                                )
+
+                                Spacer(Modifier.height(12.dp))
+                                HorizontalDivider()
+                                Spacer(Modifier.height(12.dp))
+
+                                DisplaySettings(
+                                    config = config,
+                                    isMirroring = isMirroring,
+                                    showFloatingNav = scrcpyVm.showFloatingNav,
+                                    showTouchpadOverlay = scrcpyVm.showTouchpadOverlay,
+                                    showKeyboard = scrcpyVm.showKeyboard,
+                                    onShowFloatingNavChange = { next ->
+                                        if (config.videoEnabled && config.videoSource != "camera") {
+                                            scrcpyVm.showFloatingNav = next
+                                            config = config.copy(showFloatingNav = next)
+                                            if (rememberSettings && deviceKey != null) {
+                                                ScrcpyConfigStore.save(context, deviceKey, config)
+                                            }
+                                        }
+                                    },
+                                    onShowTouchpadChange = { next ->
+                                        if (config.videoEnabled && config.videoSource != "camera") {
+                                            scrcpyVm.showTouchpadOverlay = next
+                                            config = config.copy(showTouchpad = next)
+                                            if (next) activeSession?.ensureUhidDevices()
+                                            if (rememberSettings && deviceKey != null) {
+                                                ScrcpyConfigStore.save(context, deviceKey, config)
+                                            }
+                                        }
+                                    },
+                                    onShowKeyboardChange = { next ->
+                                        if (config.videoEnabled && config.videoSource != "camera") {
+                                            scrcpyVm.showKeyboard = next
+                                            config = config.copy(showKeyboard = next)
+                                            if (next) activeSession?.ensureUhidDevices()
+                                            if (rememberSettings && deviceKey != null) {
+                                                ScrcpyConfigStore.save(context, deviceKey, config)
+                                            }
+                                        }
+                                    },
+                                    onConfigChange = {
+                                        config = it
+                                        if (config.videoEnabled && config.videoSource != "camera") {
+                                            activeSession?.clipboardSyncEnabled = it.clipboardSync
+                                        }
+                                        if (rememberSettings && deviceKey != null) {
+                                            ScrcpyConfigStore.save(context, deviceKey, it)
+                                        }
+                                    }
+                                )
+
+                                Spacer(Modifier.height(16.dp))
+
+                                if (isDeviceConnected && deviceKey != null) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable(enabled = !isMirroring) {
+                                                    val next = !rememberSettings
+                                                    rememberSettings = next
+                                                    ScrcpyConfigStore.setRememberEnabled(context, deviceKey, next)
+                                                    if (!next) {
+                                                        ScrcpyConfigStore.resetToDefaults(context, deviceKey)
+                                                    }
+                                                }
+                                        ) {
+                                            Checkbox(
+                                                checked = rememberSettings,
+                                                onCheckedChange = { checked ->
+                                                    rememberSettings = checked
+                                                    ScrcpyConfigStore.setRememberEnabled(context, deviceKey, checked)
+                                                    if (!checked) {
+                                                        ScrcpyConfigStore.resetToDefaults(context, deviceKey)
+                                                    }
+                                                },
+                                                enabled = !isMirroring
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(
+                                                text = stringResource(R.string.scrcpy_remember_settings),
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        }
+
+                                        TextButton(
+                                            onClick = {
+                                                config = ScrcpyConfig()
+                                                ScrcpyConfigStore.resetToDefaults(context, deviceKey)
+                                                Toast.makeText(context, context.getString(R.string.scrcpy_settings_reset), Toast.LENGTH_SHORT).show()
+                                            },
+                                            enabled = !isMirroring
+                                        ) {
+                                            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(stringResource(R.string.scrcpy_btn_reset_defaults))
+                                        }
+                                    }
+
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
+                            }
+                        }
+                    }
+                }
+                ScrcpyTab.LOGS -> {
+                    ScrcpyLogViewer(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        activeConn = activeConn,
+                        config = config
+                    )
+                }
+                ScrcpyTab.RECORDINGS -> {
+                    ScrcpyRecordingsViewer(
+                        modifier = Modifier.fillMaxSize(),
+                        isRecording = isRecording
+                    )
+                }
+            }
             }
         }
     }
@@ -1441,8 +1513,6 @@ private fun VirtualScreenSettings(
                 enabled = !isMirroring,
                 label = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(2.dp))
                         Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
                     }
                 }
@@ -1824,8 +1894,24 @@ private fun VideoSettings(
     Text(stringResource(R.string.section_video), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
 
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus1 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.videoEnabled,
+            enabled = !isMirroring,
+            role = Role.Switch,
+            interactionSource = switchRowFocus1,
+            indication = null,
+            onValueChange = { isChecked ->
+                val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
+                    config.copy(videoEnabled = false, audioEnabled = true)
+                } else {
+                    config.copy(videoEnabled = isChecked)
+                }
+                onConfigChange(newConfig)
+            }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1839,14 +1925,8 @@ private fun VideoSettings(
         }
         Switch(
             checked = config.videoEnabled,
-            onCheckedChange = { isChecked ->
-                val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
-                    config.copy(videoEnabled = false, audioEnabled = true)
-                } else {
-                    config.copy(videoEnabled = isChecked)
-                }
-                onConfigChange(newConfig)
-            },
+            interactionSource = switchRowFocus1,
+            onCheckedChange = null,
             enabled = !isMirroring
         )
     }
@@ -1921,8 +2001,6 @@ private fun VideoSettings(
                     enabled = !isMirroring,
                     label = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(2.dp))
                             Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
                         }
                     }
@@ -1961,8 +2039,6 @@ private fun VideoSettings(
                     enabled = !isMirroring,
                     label = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(2.dp))
                             Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
                         }
                     }
@@ -2002,8 +2078,6 @@ private fun VideoSettings(
                 enabled = !isMirroring,
                 label = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(2.dp))
                         Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
                     }
                 }
@@ -2095,6 +2169,54 @@ private fun VideoSettings(
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_angle), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        val angleValue = config.angle.orEmpty()
+        val angleInvalid = angleValue.isNotEmpty() && !ScrcpyConfig.isValidAngle(angleValue)
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedButton(
+                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, -1.0))) },
+                enabled = !isMirroring,
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.padding(top = 4.dp).size(48.dp)
+            ) {
+                Text("\u2212", style = MaterialTheme.typography.titleLarge)
+            }
+            OutlinedTextField(
+                value = angleValue,
+                onValueChange = { input ->
+                    val cleaned = input.filter { it.isDigit() || it == '-' || it == '.' }
+                    onConfigChange(config.copy(angle = cleaned.ifEmpty { null }))
+                },
+                enabled = !isMirroring,
+                singleLine = true,
+                isError = angleInvalid,
+                placeholder = { Text("0") },
+                supportingText = {
+                    Text(
+                        stringResource(if (angleInvalid) R.string.angle_invalid else R.string.angle_hint),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, 1.0))) },
+                enabled = !isMirroring,
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.padding(top = 4.dp).size(48.dp)
+            ) {
+                Text("+", style = MaterialTheme.typography.titleLarge)
+            }
+        }
     }
 }
 
@@ -2112,8 +2234,17 @@ private fun AudioSettings(
     Text(stringResource(R.string.section_audio), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
 
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus2 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.audioEnabled && supportsAudio,
+            enabled = supportsAudio && !isMirroring,
+            role = Role.Switch,
+            interactionSource = switchRowFocus2,
+            indication = null,
+            onValueChange = { onConfigChange(config.copy(audioEnabled = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2128,7 +2259,8 @@ private fun AudioSettings(
         }
         Switch(
             checked = config.audioEnabled && supportsAudio,
-            onCheckedChange = { onConfigChange(config.copy(audioEnabled = it)) },
+            interactionSource = switchRowFocus2,
+            onCheckedChange = null,
             enabled = supportsAudio && !isMirroring
         )
     }
@@ -2213,8 +2345,6 @@ private fun AudioSettings(
                         enabled = !isMirroring,
                         label = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(2.dp))
                                 Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
                             }
                         }
@@ -2227,8 +2357,19 @@ private fun AudioSettings(
         if (showAudioDup) {
             val supportsAudioDup = apiLevel >= 33
             Spacer(Modifier.height(8.dp))
+            // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+            val switchRowFocus3 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.toggleable(
+            value = config.audioDup && supportsAudioDup,
+            enabled = supportsAudioDup && !isMirroring,
+            role = Role.Switch,
+            interactionSource = switchRowFocus3,
+            indication = null,
+            onValueChange = { isChecked ->
+                        onConfigChange(config.copy(audioDup = isChecked))
+                    }
+        ).fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -2243,9 +2384,8 @@ private fun AudioSettings(
                 }
                 Switch(
                     checked = config.audioDup && supportsAudioDup,
-                    onCheckedChange = { isChecked ->
-                        onConfigChange(config.copy(audioDup = isChecked))
-                    },
+                    interactionSource = switchRowFocus3,
+                    onCheckedChange = null,
                     enabled = supportsAudioDup && !isMirroring
                 )
             }
@@ -2283,12 +2423,21 @@ private fun DisplaySettings(
     )
     Spacer(Modifier.height(8.dp))
 
+    val screenOffEnabled = !isMirroring && isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus4 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.turnScreenOff && isDisplaySupported,
+            enabled = screenOffEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus4,
+            indication = null,
+            onValueChange = { onConfigChange(config.copy(turnScreenOff = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val screenOffEnabled = !isMirroring && isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_screen_off_title),
@@ -2303,19 +2452,29 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.turnScreenOff && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(turnScreenOff = it)) },
+            interactionSource = switchRowFocus4,
+            onCheckedChange = null,
             enabled = screenOffEnabled
         )
     }
 
     Spacer(Modifier.height(8.dp))
 
+    val navEnabled = isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus5 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showFloatingNav && isDisplaySupported,
+            enabled = navEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus5,
+            indication = null,
+            onValueChange = { onShowFloatingNavChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val navEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_floating_nav_title),
@@ -2330,19 +2489,29 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showFloatingNav && isDisplaySupported,
-            onCheckedChange = { onShowFloatingNavChange(it) },
+            interactionSource = switchRowFocus5,
+            onCheckedChange = null,
             enabled = navEnabled
         )
     }
 
     Spacer(Modifier.height(8.dp))
 
+    val volEnabled = isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus6 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.bindVolumeKeys && isDisplaySupported,
+            enabled = volEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus6,
+            indication = null,
+            onValueChange = { onConfigChange(config.copy(bindVolumeKeys = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val volEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_bind_volume_title),
@@ -2357,19 +2526,29 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.bindVolumeKeys && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(bindVolumeKeys = it)) },
+            interactionSource = switchRowFocus6,
+            onCheckedChange = null,
             enabled = volEnabled
         )
     }
 
     Spacer(Modifier.height(8.dp))
 
+    val clipEnabled = isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus7 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = config.clipboardSync && isDisplaySupported,
+            enabled = clipEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus7,
+            indication = null,
+            onValueChange = { onConfigChange(config.copy(clipboardSync = it)) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val clipEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_clipboard_sync_title),
@@ -2384,19 +2563,29 @@ private fun DisplaySettings(
         }
         Switch(
             checked = config.clipboardSync && isDisplaySupported,
-            onCheckedChange = { onConfigChange(config.copy(clipboardSync = it)) },
+            interactionSource = switchRowFocus7,
+            onCheckedChange = null,
             enabled = clipEnabled
         )
     }
 
     Spacer(Modifier.height(8.dp))
 
+    val touchpadEnabled = isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus8 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showTouchpadOverlay && isDisplaySupported,
+            enabled = touchpadEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus8,
+            indication = null,
+            onValueChange = { onShowTouchpadChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val touchpadEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_touchpad_title),
@@ -2411,19 +2600,29 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showTouchpadOverlay && isDisplaySupported,
-            onCheckedChange = { onShowTouchpadChange(it) },
+            interactionSource = switchRowFocus8,
+            onCheckedChange = null,
             enabled = touchpadEnabled
         )
     }
 
     Spacer(Modifier.height(8.dp))
 
+    val keyboardEnabled = isDisplaySupported
+    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+    val switchRowFocus9 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.toggleable(
+            value = showKeyboard && isDisplaySupported,
+            enabled = keyboardEnabled,
+            role = Role.Switch,
+            interactionSource = switchRowFocus9,
+            indication = null,
+            onValueChange = { onShowKeyboardChange(it) }
+        ).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val keyboardEnabled = isDisplaySupported
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.display_keyboard_title),
@@ -2438,7 +2637,8 @@ private fun DisplaySettings(
         }
         Switch(
             checked = showKeyboard && isDisplaySupported,
-            onCheckedChange = { onShowKeyboardChange(it) },
+            interactionSource = switchRowFocus9,
+            onCheckedChange = null,
             enabled = keyboardEnabled
         )
     }
@@ -2542,7 +2742,12 @@ private fun ScrcpyVideoPlayer(
     onKeyEvent: (action: Int, keyCode: Int) -> Unit,
     onTouchEvent: (action: Int, pointerId: Long, x: Float, y: Float, vw: Int, vh: Int) -> Unit,
     onSurfaceCreated: (SurfaceHolder) -> Unit,
-    onSurfaceDestroyed: () -> Unit = {}
+    onSurfaceDestroyed: () -> Unit = {},
+    remoteVolume: Int? = null,
+    remoteVolumeMax: Int? = null,
+    onRemoteVolumeStep: (Int) -> Unit = {},
+    onRemoteVolumeSet: (Int) -> Unit = {},
+    onRemoteVolumeMuteToggle: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -2616,7 +2821,31 @@ private fun ScrcpyVideoPlayer(
     val isImeVisible = WindowInsets.isImeVisible
     var imeBuffer by remember { mutableStateOf(TextFieldValue("  ", selection = TextRange(2))) }
 
-    var controlsExpanded by remember { mutableStateOf(false) }
+    // Remote-friendly overlay state. Visible at start, hides after 6 s without input.
+    var overlayVisible by remember { mutableStateOf(true) }
+    var overlayActivity by remember { mutableIntStateOf(0) }
+    var volumeAdjusting by remember { mutableStateOf(false) }
+    var statsVisible by rememberSaveable { mutableStateOf(false) }
+    var rootFocused by remember { mutableStateOf(false) }
+    // Overlay columns, left to right: volume/stats | floating nav (optional) | control buttons.
+    // Left/Right jump between them explicitly instead of using spatial focus search, which
+    // could land on the hidden keyboard field or the video view in the middle of the screen.
+    val overlayControlsFocus = remember { FocusRequester() }
+    val leftControlsFocus = remember { FocusRequester() }
+    val floatingNavFocus = remember { FocusRequester() }
+    var rightColumnHasFocus by remember { mutableStateOf(false) }
+    var leftColumnHasFocus by remember { mutableStateOf(false) }
+    val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    fun pressBack() { backDispatcher?.onBackPressed() }
+
+    // Back (or Left from the left column) hides the overlay; while adjusting volume it ends adjusting first.
+    BackHandler(enabled = overlayVisible) {
+        overlayVisible = false
+    }
+    BackHandler(enabled = volumeAdjusting) {
+        volumeAdjusting = false
+        overlayActivity++
+    }
     var overlayRectInRoot by remember { mutableStateOf(Rect.Zero) }
     var videoPositionInRoot by remember { mutableStateOf(Offset.Zero) }
 
@@ -2657,6 +2886,7 @@ private fun ScrcpyVideoPlayer(
     BoxWithConstraints(
         modifier = modifier
             .focusRequester(focusRequester)
+            .onFocusChanged { rootFocused = it.isFocused }
             .focusTarget()
             .onPreviewKeyEvent { keyEvent ->
                 if (bindVolumeKeys && !videoSourceIsCamera) {
@@ -2677,6 +2907,50 @@ private fun ScrcpyVideoPlayer(
                         return@onPreviewKeyEvent true
                     }
                 }
+                // While typing to the device, arrows/enter go to the device keyboard.
+                if (showKeyboard && !videoSourceIsCamera) return@onPreviewKeyEvent false
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    overlayActivity++
+                    val navShown = showFloatingNav && !videoSourceIsCamera
+                    when (keyEvent.key) {
+                        Key.DirectionLeft -> {
+                            // Hidden overlay: Left shows it, like every other direction.
+                            // Open overlay: Left moves one column left; from the left column it
+                            // acts as Back (hides the overlay).
+                            when {
+                                !overlayVisible -> overlayVisible = true
+                                volumeAdjusting -> volumeAdjusting = false
+                                leftColumnHasFocus -> pressBack()
+                                rightColumnHasFocus && navShown -> runCatching { floatingNavFocus.requestFocus() }
+                                else -> runCatching { leftControlsFocus.requestFocus() }
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionRight -> {
+                            when {
+                                !overlayVisible -> overlayVisible = true
+                                // Adjusting volume: the slider handles Right (mute toggle).
+                                volumeAdjusting -> return@onPreviewKeyEvent false
+                                leftColumnHasFocus && navShown -> runCatching { floatingNavFocus.requestFocus() }
+                                rightColumnHasFocus -> Unit // already the rightmost column
+                                else -> runCatching { overlayControlsFocus.requestFocus() }
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp, Key.DirectionDown,
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            if (!overlayVisible) {
+                                overlayVisible = true
+                                return@onPreviewKeyEvent true
+                            }
+                            if (rootFocused) {
+                                runCatching { overlayControlsFocus.requestFocus() }
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                        else -> {}
+                    }
+                }
                 false
             },
         contentAlignment = Alignment.Center
@@ -2692,6 +2966,9 @@ private fun ScrcpyVideoPlayer(
             modifier = Modifier
                 .size(1.dp)
                 .alpha(0f)
+                // Only focusable while the Keyboard toggle is on; otherwise D-pad focus could
+                // land here, pop up the IME and swallow the arrow keys.
+                .focusProperties { canFocus = showKeyboard && !videoSourceIsCamera }
                 .focusRequester(keyboardFocusRequester)
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
@@ -2758,11 +3035,10 @@ private fun ScrcpyVideoPlayer(
                 SurfaceView(ctx).apply {
                     surfaceViewRef = this
                     keepScreenOn = true
-                    isFocusable = true
-                    isFocusableInTouchMode = true
-                    if (bindVolumeKeys && !videoSourceIsCamera) {
-                        requestFocus()
-                    }
+                    // Not a D-pad focus target: volume keys are forwarded by the player's
+                    // key handler, and a focusable view here steals focus from the overlay.
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     setOnKeyListener { _, keyCode, event ->
                         if (bindVolumeKeys && !videoSourceIsCamera && (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
                                                keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
@@ -2824,6 +3100,10 @@ private fun ScrcpyVideoPlayer(
                     videoPositionInRoot = it.positionInRoot()
                 }
                 .pointerInteropFilter { event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        overlayVisible = true
+                        overlayActivity++
+                    }
                     if (videoSourceIsCamera) return@pointerInteropFilter false
                     val touchInRoot = Offset(event.x, event.y) + videoPositionInRoot
                     if (showTouchpadOverlay && overlayRectInRoot.contains(touchInRoot)) {
@@ -2853,413 +3133,219 @@ private fun ScrcpyVideoPlayer(
                 }
         )
 
-        // Floating Draggable & Edge-Aware Sticky Controls
-        val density = LocalDensity.current
-        val buttonSizePx = with(density) { 48.dp.toPx() }
-        val paddingPx = with(density) { 12.dp.toPx() }
-        val containerWidthPx = with(density) { maxWidth.toPx() }
-        val containerHeightPx = with(density) { maxHeight.toPx() }
-        val topInsetPx = if (isFullScreen) {
-            with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx() }
-        } else 0f
-
-        val minX = paddingPx
-        val maxX = maxOf(minX, containerWidthPx - buttonSizePx - paddingPx)
-        val minY = topInsetPx + paddingPx
-        val maxY = maxOf(minY, containerHeightPx - buttonSizePx - paddingPx)
-
-        var normX by rememberSaveable { mutableFloatStateOf(1f) }
-        var normY by rememberSaveable { mutableFloatStateOf(0f) }
-
-        val animNormX = remember { Animatable(normX) }
-        val animNormY = remember { Animatable(normY) }
-
-        LaunchedEffect(normX, normY) {
-            if (!animNormX.isRunning && animNormX.targetValue != normX) {
-                animNormX.snapTo(normX)
+        // ---- Remote-friendly overlay ------------------------------------------------------
+        // Right: control buttons stacked vertically. Left: device volume + stream stats toggle.
+        // Any D-pad direction / Select / touch shows it; Back (or Left at the edge) hides it;
+        // it fades out after 6 seconds without input.
+        LaunchedEffect(overlayVisible) {
+            if (overlayVisible) {
+                if (!showKeyboard) {
+                    delay(80)
+                    runCatching { overlayControlsFocus.requestFocus() }
+                }
+            } else {
+                volumeAdjusting = false
+                if (!showKeyboard) runCatching { focusRequester.requestFocus() }
             }
-            if (!animNormY.isRunning && animNormY.targetValue != normY) {
-                animNormY.snapTo(normY)
+        }
+        LaunchedEffect(overlayVisible, overlayActivity) {
+            if (overlayVisible) {
+                delay(6000)
+                overlayVisible = false
             }
         }
 
-        var layoutWidth by remember { mutableIntStateOf(0) }
-        var layoutHeight by remember { mutableIntStateOf(0) }
-
-        val side = remember(animNormX.value, animNormY.value) {
-            val curX = animNormX.value
-            val curY = animNormY.value
-            val distLeft = curX
-            val distRight = 1f - curX
-            val distTop = curY
-            val distBottom = 1f - curY
-            val minDist = minOf(distRight, distLeft, distTop, distBottom)
-            when (minDist) {
-                distRight -> ControlSide.RIGHT
-                distLeft -> ControlSide.LEFT
-                distTop -> ControlSide.TOP
-                else -> ControlSide.BOTTOM
-            }
+        if (statsVisible) {
+            StreamStatsPanel(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+                    .zIndex(12f)
+            )
         }
 
-        val arrowIcon = when (side) {
-            ControlSide.TOP -> if (controlsExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown
-            ControlSide.BOTTOM -> if (controlsExpanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp
-            ControlSide.LEFT -> if (controlsExpanded) Icons.AutoMirrored.Filled.KeyboardArrowLeft else Icons.AutoMirrored.Filled.KeyboardArrowRight
-            ControlSide.RIGHT -> if (controlsExpanded) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.AutoMirrored.Filled.KeyboardArrowLeft
-        }
-
-        val maxItems = if (maxWidth >= 580.dp) 9 else 5
-        val isAlignedEnd = side == ControlSide.RIGHT || (animNormX.value > 0.5f && (side == ControlSide.TOP || side == ControlSide.BOTTOM))
-        val flowArrangement = Arrangement.spacedBy(8.dp, if (isAlignedEnd) Alignment.End else Alignment.Start)
-
-        val actionButtons = @Composable {
-            FlowRow(
-                modifier = Modifier.widthIn(max = (maxWidth - 80.dp).coerceAtLeast(180.dp)),
-                maxItemsInEachRow = maxItems,
-                horizontalArrangement = flowArrangement,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        AnimatedVisibility(
+            visible = overlayVisible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(400)),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .zIndex(10f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(end = 16.dp, top = 16.dp, bottom = 16.dp)
+                    .verticalScroll(rememberScrollState())
+                    .focusRequester(overlayControlsFocus)
+                    .onFocusChanged { rightColumnHasFocus = it.hasFocus }
+                    .focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (canRecord) {
-                    IconButton(
-                        onClick = onToggleRecord,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (isRecording) Color.Red.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.6f)
-                        )
-                    ) {
-                        Icon(
-                            if (isRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
-                            contentDescription = stringResource(if (isRecording) R.string.scrcpy_recording_stopped else R.string.scrcpy_recording_started),
-                            tint = if (isRecording) Color.White else Color.Red
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { captureScreenshot() },
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        Icons.Filled.PhotoCamera,
-                        contentDescription = stringResource(R.string.cd_take_screenshot),
-                        tint = Color.White
-                    )
-                }
-                if (videoSourceIsCamera) {
-                    IconButton(
-                        onClick = onToggleTorch,
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                    ) {
-                        Icon(
-                            if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
-                            contentDescription = stringResource(R.string.cd_toggle_torch),
-                            tint = if (torchOn) Color.Yellow else Color.White
-                        )
-                    }
-                }
-                if (!videoSourceIsCamera) {
-                    IconButton(
-                        onClick = onRotateDevice,
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                    ) {
-                        Icon(
-                            Icons.Filled.ScreenRotation,
-                            contentDescription = stringResource(R.string.cd_rotate_device),
-                            tint = Color.White
-                        )
-                    }
-                    if (onPasteClipboard != null) {
+                    if (canRecord) {
                         IconButton(
-                            onClick = onPasteClipboard,
-                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                            onClick = onToggleRecord,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (isRecording) Color.Red.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.6f)
+                            )
                         ) {
                             Icon(
-                                Icons.Filled.ContentPaste,
-                                contentDescription = stringResource(R.string.cd_paste_clipboard),
-                                tint = Color.White
+                                if (isRecording) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                                contentDescription = stringResource(if (isRecording) R.string.scrcpy_recording_stopped else R.string.scrcpy_recording_started),
+                                tint = if (isRecording) Color.White else Color.Red
                             )
                         }
                     }
                     IconButton(
-                        onClick = onToggleFloatingNav,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showFloatingNav) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
+                        onClick = { captureScreenshot() },
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
                     ) {
                         Icon(
-                            Icons.Filled.Navigation,
-                            contentDescription = stringResource(R.string.display_floating_nav_title),
-                            tint = if (showFloatingNav) MaterialTheme.colorScheme.onPrimary else Color.White
+                            Icons.Filled.PhotoCamera,
+                            contentDescription = stringResource(R.string.cd_take_screenshot),
+                            tint = Color.White
                         )
                     }
-                    IconButton(
-                        onClick = onToggleTouchpadOverlay,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showTouchpadOverlay) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
-                    ) {
-                        Icon(
-                            Icons.Filled.TouchApp,
-                            contentDescription = stringResource(R.string.tab_touchpad),
-                            tint = if (showTouchpadOverlay) MaterialTheme.colorScheme.onPrimary else Color.White
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            onToggleKeyboard(!showKeyboard)
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (showKeyboard || isImeVisible) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                            } else {
-                                Color.Black.copy(alpha = 0.6f)
-                            }
-                        )
-                    ) {
-                        Icon(
-                            Icons.Filled.Keyboard,
-                            contentDescription = stringResource(R.string.tab_keyboard),
-                            tint = if (showKeyboard || isImeVisible) MaterialTheme.colorScheme.onPrimary else Color.White
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onToggleFullScreen,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        if (isFullScreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                        contentDescription = stringResource(R.string.cd_toggle_fullscreen),
-                        tint = Color.White
-                    )
-                }
-                IconButton(
-                    onClick = onStop,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_stop_mirroring), tint = Color.White)
-                }
-            }
-        }
-
-        val currentSpanX by rememberUpdatedState(maxX - minX)
-        val currentSpanY by rememberUpdatedState(maxY - minY)
-
-        fun snapToNearestEdge() {
-            val curX = animNormX.value
-            val curY = animNormY.value
-
-            val distLeft = curX
-            val distRight = 1f - curX
-            val distTop = curY
-            val distBottom = 1f - curY
-
-            val minDist = minOf(distLeft, distRight, distTop, distBottom)
-
-            val targetX: Float
-            val targetY: Float
-
-            when (minDist) {
-                distLeft -> {
-                    targetX = 0f
-                    targetY = curY
-                }
-                distRight -> {
-                    targetX = 1f
-                    targetY = curY
-                }
-                distTop -> {
-                    targetX = curX
-                    targetY = 0f
-                }
-                else -> {
-                    targetX = curX
-                    targetY = 1f
-                }
-            }
-
-            normX = targetX
-            normY = targetY
-
-            coroutineScope.launch {
-                animNormX.animateTo(
-                    targetValue = targetX,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-            }
-            coroutineScope.launch {
-                animNormY.animateTo(
-                    targetValue = targetY,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-            }
-        }
-
-        val arrowButton = @Composable {
-            Box(
-                modifier = Modifier.pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = {
-                            controlsExpanded = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            if (currentSpanX > 0f) {
-                                val nextX = (animNormX.value + dragAmount.x / currentSpanX).coerceIn(0f, 1f)
-                                coroutineScope.launch { animNormX.snapTo(nextX) }
-                            }
-                            if (currentSpanY > 0f) {
-                                val nextY = (animNormY.value + dragAmount.y / currentSpanY).coerceIn(0f, 1f)
-                                coroutineScope.launch { animNormY.snapTo(nextY) }
-                            }
-                        },
-                        onDragEnd = {
-                            snapToNearestEdge()
-                        },
-                        onDragCancel = {
-                            snapToNearestEdge()
+                    if (videoSourceIsCamera) {
+                        IconButton(
+                            onClick = onToggleTorch,
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+                                contentDescription = stringResource(R.string.cd_toggle_torch),
+                                tint = if (torchOn) Color.Yellow else Color.White
+                            )
                         }
-                    )
-                }
-            ) {
-                IconButton(
-                    onClick = { controlsExpanded = !controlsExpanded },
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        imageVector = arrowIcon,
-                        contentDescription = stringResource(
-                            if (controlsExpanded) R.string.cd_collapse_controls else R.string.cd_expand_controls
-                        ),
-                        tint = Color.White
-                    )
-                }
+                    }
+                    if (!videoSourceIsCamera) {
+                        IconButton(
+                            onClick = onRotateDevice,
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                Icons.Filled.ScreenRotation,
+                                contentDescription = stringResource(R.string.cd_rotate_device),
+                                tint = Color.White
+                            )
+                        }
+                        if (onPasteClipboard != null) {
+                            IconButton(
+                                onClick = onPasteClipboard,
+                                colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                            ) {
+                                Icon(
+                                    Icons.Filled.ContentPaste,
+                                    contentDescription = stringResource(R.string.cd_paste_clipboard),
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onToggleFloatingNav,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showFloatingNav) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.Navigation,
+                                contentDescription = stringResource(R.string.display_floating_nav_title),
+                                tint = if (showFloatingNav) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = onToggleTouchpadOverlay,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showTouchpadOverlay) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.TouchApp,
+                                contentDescription = stringResource(R.string.tab_touchpad),
+                                tint = if (showTouchpadOverlay) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                onToggleKeyboard(!showKeyboard)
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = if (showKeyboard || isImeVisible) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                } else {
+                                    Color.Black.copy(alpha = 0.6f)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.Keyboard,
+                                contentDescription = stringResource(R.string.tab_keyboard),
+                                tint = if (showKeyboard || isImeVisible) MaterialTheme.colorScheme.onPrimary else Color.White
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onStop,
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_stop_mirroring), tint = Color.White)
+                    }
             }
         }
 
-        val layoutOffsetModifier = Modifier.offset {
-            val effW = if (layoutWidth > 0) layoutWidth else buttonSizePx.roundToInt()
-            val effH = if (layoutHeight > 0) layoutHeight else buttonSizePx.roundToInt()
-
-            val curOffsetX = minX + animNormX.value * (maxX - minX)
-            val curOffsetY = minY + animNormY.value * (maxY - minY)
-
-            val x = when (side) {
-                ControlSide.RIGHT -> {
-                    val extraW = maxOf(0, effW - buttonSizePx.roundToInt())
-                    maxOf(paddingPx.roundToInt(), (curOffsetX - extraW).roundToInt())
-                }
-                ControlSide.LEFT -> {
-                    val maxXInt = maxOf(paddingPx.roundToInt(), (containerWidthPx - effW - paddingPx).roundToInt())
-                    minOf(curOffsetX.roundToInt(), maxXInt)
-                }
-                ControlSide.TOP, ControlSide.BOTTOM -> {
-                    val maxXInt = maxOf(paddingPx.roundToInt(), (containerWidthPx - effW - paddingPx).roundToInt())
-                    curOffsetX.roundToInt().coerceIn(paddingPx.roundToInt(), maxXInt)
-                }
-            }
-
-            val y = when (side) {
-                ControlSide.BOTTOM -> {
-                    val extraH = maxOf(0, effH - buttonSizePx.roundToInt())
-                    maxOf((topInsetPx + paddingPx).roundToInt(), (curOffsetY - extraH).roundToInt())
-                }
-                ControlSide.TOP -> {
-                    val maxYInt = maxOf((topInsetPx + paddingPx).roundToInt(), (containerHeightPx - effH - paddingPx).roundToInt())
-                    minOf(curOffsetY.roundToInt(), maxYInt)
-                }
-                ControlSide.LEFT, ControlSide.RIGHT -> {
-                    val maxYInt = maxOf((topInsetPx + paddingPx).roundToInt(), (containerHeightPx - effH - paddingPx).roundToInt())
-                    curOffsetY.roundToInt().coerceIn((topInsetPx + paddingPx).roundToInt(), maxYInt)
-                }
-            }
-
-            IntOffset(x, y)
-        }
-
-        Box(
+        AnimatedVisibility(
+            visible = overlayVisible,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(400)),
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .then(layoutOffsetModifier)
+                .align(Alignment.CenterStart)
                 .zIndex(10f)
-                .onSizeChanged {
-                    layoutWidth = it.width
-                    layoutHeight = it.height
-                }
         ) {
-            when (side) {
-                ControlSide.LEFT -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        arrowButton()
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = Alignment.CenterStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = Alignment.CenterStart)
-                        ) {
-                            actionButtons()
+            Column(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp)
+                    .focusRequester(leftControlsFocus)
+                    .onFocusChanged { leftColumnHasFocus = it.hasFocus }
+                    .focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                RemoteVolumeSlider(
+                    level = remoteVolume,
+                    max = remoteVolumeMax,
+                    adjusting = volumeAdjusting,
+                    onAdjustingChange = { volumeAdjusting = it },
+                    onStep = onRemoteVolumeStep,
+                    onSetLevel = onRemoteVolumeSet,
+                    onToggleMute = onRemoteVolumeMuteToggle,
+                    onActivity = { overlayActivity++ }
+                )
+                IconButton(
+                    onClick = {
+                        statsVisible = !statsVisible
+                        overlayActivity++
+                    },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = if (statsVisible) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        } else {
+                            Color.Black.copy(alpha = 0.6f)
                         }
-                    }
-                }
-                ControlSide.RIGHT -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = Alignment.CenterEnd),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = Alignment.CenterEnd)
-                        ) {
-                            actionButtons()
-                        }
-                        arrowButton()
-                    }
-                }
-                ControlSide.TOP -> {
-                    Column(
-                        horizontalAlignment = if (animNormX.value > 0.5f) Alignment.End else Alignment.Start,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        arrowButton()
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = if (animNormX.value > 0.5f) Alignment.TopEnd else Alignment.TopStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = if (animNormX.value > 0.5f) Alignment.TopEnd else Alignment.TopStart)
-                        ) {
-                            actionButtons()
-                        }
-                    }
-                }
-                ControlSide.BOTTOM -> {
-                    Column(
-                        horizontalAlignment = if (animNormX.value > 0.5f) Alignment.End else Alignment.Start,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AnimatedVisibility(
-                            visible = controlsExpanded,
-                            enter = fadeIn() + expandIn(expandFrom = if (animNormX.value > 0.5f) Alignment.BottomEnd else Alignment.BottomStart),
-                            exit = fadeOut() + shrinkOut(shrinkTowards = if (animNormX.value > 0.5f) Alignment.BottomEnd else Alignment.BottomStart)
-                        ) {
-                            actionButtons()
-                        }
-                        arrowButton()
-                    }
+                    )
+                ) {
+                    Icon(
+                        io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.StreamStats,
+                        contentDescription = "Stream stats",
+                        tint = if (statsVisible) MaterialTheme.colorScheme.onPrimary else Color.White
+                    )
                 }
             }
         }
@@ -3268,7 +3354,10 @@ private fun ScrcpyVideoPlayer(
             FloatingVerticalNavBar(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(16.dp),
+                    // Sit left of the control column while the overlay is showing
+                    .padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = if (overlayVisible) 80.dp else 16.dp)
+                    .focusRequester(floatingNavFocus)
+                    .focusGroup(),
                 onNavBack = onNavBack,
                 onNavHome = onNavHome,
                 onNavRecents = onNavRecents

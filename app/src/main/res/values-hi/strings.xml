@@ -231,7 +231,7 @@
     <string name="scrcpy_audio_only_banner">ऑडियो स्ट्रीमिंग सक्रिय</string>
     <string name="scrcpy_audio_only_desc">केवल ऑडियो मोड (वीडियो स्ट्रीम अक्षम)</string>
     <string name="label_resolution">अधिकतम आकार</string>
-    <string name="label_add_chip">+ जोड़ें</string>
+    <string name="label_add_chip">जोड़ें</string>
     <string name="dialog_add_max_size_title">कस्टम अधिकतम आकार जोड़ें</string>
     <string name="dialog_add_max_size_msg">पिक्सेल में अधिकतम आकार दर्ज करें (उदा. 1440 या 2160):</string>
     <string name="dialog_add_fps_title">कस्टम फ्रेम रेट जोड़ें</string>

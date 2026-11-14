@@ -233,7 +233,7 @@
     <string name="scrcpy_audio_only_banner">Трансляция аудио активна</string>
     <string name="scrcpy_audio_only_desc">Режим «Только аудио» (видеопоток отключен)</string>
     <string name="label_resolution">Макс. размер</string>
-    <string name="label_add_chip">+ Добавить</string>
+    <string name="label_add_chip">Добавить</string>
     <string name="dialog_add_max_size_title">Добавить размер</string>
     <string name="dialog_add_max_size_msg">Введите максимальный размер в пикселях (например, 1440 или 2160):</string>
     <string name="dialog_add_fps_title">Добавить частоту кадров</string>

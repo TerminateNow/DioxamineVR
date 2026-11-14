@@ -1,6 +1,7 @@
 package io.github.rhythmcache.dioxamine.scrcpy
 
 import org.json.JSONObject
+import java.util.Locale
 
 data class ScrcpyConfig(
     val videoEnabled: Boolean = true,  // Stream screen/camera video
@@ -35,7 +36,8 @@ data class ScrcpyConfig(
     val audioCodec: String = "opus",      // opus, aac, flac, raw
     val audioBitRateKbps: Int = 128,      // 64, 128, 192, 256, 320 Kbps
     val captureOrientation: String? = null, // 0, 90, 180, 270, flip0, flip90, flip180, flip270
-    val crop: String? = null // "width:height:x:y" in device pixels, display source only (null = full screen)
+    val crop: String? = null, // "width:height:x:y" in device pixels, display source only (null = full screen)
+    val angle: String? = null // rotation in degrees, e.g. "-22" or "12.5", display source only (null = no rotation)
 ) {
     /**
      * Validates the configuration parameters, returning a list of configuration warnings
@@ -77,6 +79,10 @@ data class ScrcpyConfig(
 
         if (videoEnabled && videoSource == "display" && !crop.isNullOrBlank() && !isValidCrop(crop)) {
             errors.add("Crop must be in the format width:height:x:y using whole numbers (for example 1280:720:0:0).")
+        }
+
+        if (videoEnabled && videoSource == "display" && !angle.isNullOrBlank() && !isValidAngle(angle)) {
+            errors.add("Angle must be a number between -360 and 360 (for example -22).")
         }
 
         return errors
@@ -133,6 +139,7 @@ data class ScrcpyConfig(
             } else {
                 if (maxSize > 0) parts.add("max_size=$maxSize")
                 crop?.takeIf { isValidCrop(it) }?.let { parts.add("crop=$it") }
+                angle?.takeIf { isValidAngle(it) && it.toDouble() != 0.0 }?.let { parts.add("angle=$it") }
             }
 
             if (maxFps > 0) parts.add("max_fps=$maxFps")
@@ -190,6 +197,7 @@ data class ScrcpyConfig(
         json.put("audioBitRateKbps", audioBitRateKbps)
         captureOrientation?.let { json.put("captureOrientation", it) }
         crop?.let { json.put("crop", it) }
+        angle?.let { json.put("angle", it) }
         return json.toString()
     }
 
@@ -198,6 +206,24 @@ data class ScrcpyConfig(
         private val CROP_REGEX = Regex("""[1-9]\d*:[1-9]\d*:\d+:\d+""")
 
         fun isValidCrop(value: String): Boolean = CROP_REGEX.matches(value)
+
+        // optional minus sign, digits, optional decimals; magnitude at most 360
+        private val ANGLE_REGEX = Regex("""-?\d+(\.\d+)?""")
+
+        fun isValidAngle(value: String): Boolean =
+            ANGLE_REGEX.matches(value) && kotlin.math.abs(value.toDouble()) <= 360.0
+
+        /**
+         * Moves the angle by [delta] degrees (used by the - and + buttons).
+         * Text that is not a valid number yet (for example just "-") counts as 0.
+         * Returns null when the result is 0, meaning "no rotation".
+         */
+        fun stepAngle(current: String?, delta: Double): String? {
+            val base = current?.takeIf { isValidAngle(it) }?.toDouble() ?: 0.0
+            val next = (Math.round((base + delta) * 10.0) / 10.0).coerceIn(-360.0, 360.0)
+            if (next == 0.0) return null
+            return if (next == Math.floor(next)) next.toLong().toString() else String.format(Locale.US, "%.1f", next)
+        }
 
         fun fromJson(jsonStr: String): ScrcpyConfig {
             return runCatching {
@@ -232,7 +258,8 @@ data class ScrcpyConfig(
                     audioCodec = json.optString("audioCodec", "opus"),
                     audioBitRateKbps = json.optInt("audioBitRateKbps", 128),
                     captureOrientation = json.optString("captureOrientation").takeIf { it.isNotEmpty() && it != "null" },
-                    crop = json.optString("crop").takeIf { it.isNotEmpty() && it != "null" }
+                    crop = json.optString("crop").takeIf { it.isNotEmpty() && it != "null" },
+                    angle = json.optString("angle").takeIf { it.isNotEmpty() && it != "null" }
                 )
             }.getOrElse { ScrcpyConfig() }
         }

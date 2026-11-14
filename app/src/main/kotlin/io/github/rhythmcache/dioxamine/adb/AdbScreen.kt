@@ -1,5 +1,12 @@
 package io.github.rhythmcache.dioxamine.adb
 
+import io.github.rhythmcache.dioxamine.ui.tv.Button
+import io.github.rhythmcache.dioxamine.ui.tv.DropdownMenuItem
+import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedTextField
+import io.github.rhythmcache.dioxamine.ui.tv.TextButton
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
@@ -89,6 +96,18 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
     var showDiscoverySheet by remember { mutableStateOf(false) }
     var showAddTcpDialog by remember { mutableStateOf(false) }
     var showQrPairing by remember { mutableStateOf(false) }
+
+    // On app launch, open Discover Devices straight away if nothing is connected.
+    // A short grace period lets USB devices that are already plugged in finish connecting first.
+    LaunchedEffect(Unit) {
+        if (!vm.startupDiscoveryHandled) {
+            vm.startupDiscoveryHandled = true
+            kotlinx.coroutines.delay(800)
+            if (!vm.hasActiveDevice()) {
+                showDiscoverySheet = true
+            }
+        }
+    }
 
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
@@ -272,29 +291,6 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
                 vm.connectTls(host, port)
             }
         )
-    }
-
-    if (!showDiscoverySheet && !showQrPairing) {
-        vm.localAdbPromptTarget?.let { target ->
-            AlertDialog(
-                onDismissRequest = { vm.dismissLocalAdbPrompt(false) },
-                icon = { Icon(Icons.Filled.Devices, contentDescription = null) },
-                title = { Text(stringResource(R.string.local_adb_detected_title)) },
-                text = {
-                    Text(stringResource(R.string.local_adb_detected_msg, target.port))
-                },
-                confirmButton = {
-                    Button(onClick = { vm.connectLocalAdb() }) {
-                        Text(stringResource(R.string.btn_connect))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { vm.dismissLocalAdbPrompt(true) }) {
-                        Text(stringResource(R.string.btn_dismiss))
-                    }
-                }
-            )
-        }
     }
 }
 

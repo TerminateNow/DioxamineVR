@@ -21,7 +21,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbDetector
-import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbTarget
 import io.github.rhythmcache.dioxamine.scrcpy.ScrcpyDiscoveryCache
 import java.io.File
 
@@ -63,10 +62,6 @@ class AdbViewModel(
     var daemonDialogMessage by mutableStateOf<String?>(null)
         private set
 
-    var localAdbPromptTarget by mutableStateOf<LocalAdbTarget?>(null)
-        private set
-    private var dismissedLocalPort: Int? = null
-    private var dismissedUntilMs: Long = 0L
 
     var flashState by mutableStateOf<FlashUiState>(FlashUiState.Idle)
         private set
@@ -108,42 +103,14 @@ class AdbViewModel(
             }
         }
 
-        // Periodic local ADB detection (checks every 10s)
+        // Periodic local ADB detection (checks every 10s).
+        // The "Local ADB Detected" prompt has been removed: when local wireless ADB is found we
+        // only act if the user enabled "Auto-connect to Localhost"; otherwise we stay silent.
+        // Localhost is still listed in the Discover Devices sheet for manual connection.
         viewModelScope.launch(Dispatchers.IO) {
             kotlinx.coroutines.delay(1000)
             while (isActive) {
-                val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
-                val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
-
-                if (!detectEnabled) {
-                    if (localAdbPromptTarget != null) {
-                        withContext(Dispatchers.Main) {
-                            localAdbPromptTarget = null
-                        }
-                    }
-                } else if (!isLocalhostConnected() && localAdbPromptTarget == null) {
-                    val target = LocalAdbDetector.detect()
-                    if (target != null) {
-                        if (autoConnect) {
-                            withContext(Dispatchers.Main) {
-                                localAdbPromptTarget = null
-                            }
-                            connectTcpDirect("127.0.0.1", target.port)
-                        } else {
-                            val now = System.currentTimeMillis()
-                            val isDismissed = (target.port == dismissedLocalPort && now < dismissedUntilMs)
-                            if (!isDismissed && !isLocalhostConnected()) {
-                                withContext(Dispatchers.Main) {
-                                    localAdbPromptTarget = target
-                                }
-                            }
-                        }
-                    } else {
-                        // Port is closed / adb was toggled off -> reset dismissal for fresh future session
-                        dismissedLocalPort = null
-                        dismissedUntilMs = 0L
-                    }
-                }
+                autoConnectLocalAdbIfEnabled()
                 kotlinx.coroutines.delay(10000)
             }
         }
@@ -151,22 +118,24 @@ class AdbViewModel(
 
     fun triggerLocalAdbCheck() {
         viewModelScope.launch(Dispatchers.IO) {
-            val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
-            val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
-            if (detectEnabled && !isLocalhostConnected()) {
-                val target = LocalAdbDetector.detect() ?: return@launch
-                if (autoConnect) {
-                    withContext(Dispatchers.Main) {
-                        localAdbPromptTarget = null
-                    }
-                    connectTcpDirect("127.0.0.1", target.port)
-                } else if (localAdbPromptTarget == null) {
-                    withContext(Dispatchers.Main) {
-                        localAdbPromptTarget = target
-                    }
-                }
-            }
+            autoConnectLocalAdbIfEnabled()
         }
+    }
+
+    private fun autoConnectLocalAdbIfEnabled() {
+        val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
+        val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
+        if (!detectEnabled || !autoConnect || isLocalhostConnected()) return
+        val target = LocalAdbDetector.detect() ?: return
+        connectTcpDirect("127.0.0.1", target.port)
+    }
+
+    /** Set once the startup "Discover Devices" sheet has been considered, so it only auto-opens once per app session. */
+    var startupDiscoveryHandled = false
+
+    /** True when at least one device is connected or in the middle of connecting. */
+    fun hasActiveDevice(): Boolean = devices.values.any {
+        it.state is ConnectionState.Connected || it.state is ConnectionState.Connecting
     }
 
     fun isLocalhostConnected(): Boolean {
@@ -180,22 +149,6 @@ class AdbViewModel(
             val activeState = conn.state is ConnectionState.Connected || conn.state is ConnectionState.Connecting
             isLocal && activeState
         }
-    }
-
-    fun dismissLocalAdbPrompt(rememberDismissal: Boolean = false) {
-        val target = localAdbPromptTarget
-        if (target != null) {
-            dismissedLocalPort = target.port
-            // Temporary dismiss = 2 min cooldown, Remember dismissal = 1 hour
-            dismissedUntilMs = System.currentTimeMillis() + if (rememberDismissal) 3600_000L else 120_000L
-        }
-        localAdbPromptTarget = null
-    }
-
-    fun connectLocalAdb() {
-        val target = localAdbPromptTarget ?: return
-        localAdbPromptTarget = null
-        connectTcpDirect("127.0.0.1", target.port)
     }
 
     private fun handleDeadConnection(id: String, conn: DeviceConnection) {
@@ -633,6 +586,34 @@ class AdbViewModel(
                     daemonDialogMessage = "Failed: ${e.message}"
                 }
             }
+        }
+    }
+
+    /**
+     * Grants this app WRITE_SECURE_SETTINGS by running `pm grant` over an ADB connection to the
+     * device the app itself is running on (needed to toggle wireless debugging at boot).
+     * [onResult] is invoked on the main thread with a user-facing message.
+     */
+    fun grantWriteSecureSettings(context: Context, onResult: (success: Boolean, message: String) -> Unit) {
+        val client = activeClient()
+        if (client == null) {
+            onResult(false, "No connected ADB device. Connect to this device's own ADB first.")
+            return
+        }
+        val pkg = context.packageName
+        viewModelScope.launch(Dispatchers.IO) {
+            val (ok, msg) = try {
+                val res = client.shell("pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
+                if (res.isSuccess) {
+                    true to "Permission granted"
+                } else {
+                    false to (res.stderr.toString(Charsets.UTF_8).ifBlank { res.stdoutText }.trim()
+                        .ifBlank { "pm grant failed (exit ${res.exitCode})" })
+                }
+            } catch (e: Exception) {
+                false to "Failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) { onResult(ok, msg) }
         }
     }
 

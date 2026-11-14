@@ -231,7 +231,7 @@
     <string name="scrcpy_audio_only_banner">استریم صدا فعال است</string>
     <string name="scrcpy_audio_only_desc">حالت فقط صدا (استریم ویدیو غیرفعال است)</string>
     <string name="label_resolution">حداکثر اندازه (Max Size)</string>
-    <string name="label_add_chip">+ افزودن</string>
+    <string name="label_add_chip">افزودن</string>
     <string name="dialog_add_max_size_title">افزودن اندازه سفارشی</string>
     <string name="dialog_add_max_size_msg">حداکثر اندازه را به پیکسل وارد کنید (مثلاً 1440 یا 2160):</string>
     <string name="dialog_add_fps_title">افزودن نرخ فریم سفارشی</string>
