@@ -18,10 +18,16 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, false)) return
+        if (prefs.getBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, false)) {
+            WirelessDebugging.enable(context).onFailure {
+                AppLogger.w("BootReceiver", "Could not enable wireless debugging on boot: ${it.message}")
+            }
+        }
 
-        WirelessDebugging.enable(context).onFailure {
-            AppLogger.w("BootReceiver", "Could not enable wireless debugging on boot: ${it.message}")
+        // The Quest resets its proximity sensor mode on every boot; re-apply "off" if chosen
+        // (only the headset helper sets this preference).
+        if (prefs.getBoolean(QuestProximitySensor.PREF_SENSOR_OFF, false) && QuestProximitySensor.isQuestDevice) {
+            QuestProximitySensor.sendFromApp(context, sensorOn = false)
         }
     }
 }

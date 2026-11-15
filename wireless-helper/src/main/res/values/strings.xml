@@ -10,6 +10,10 @@
     <string name="wireless_now_title">Wireless debugging</string>
     <string name="wireless_now_subtitle">Turn Wireless debugging on or off right now. Turning it off disconnects any wireless ADB connection to this device.</string>
     <string name="refresh">Refresh</string>
+    <string name="prox_title">Proximity (light) sensor</string>
+    <string name="prox_subtitle">Off keeps the display on when the headset is taken off, and stays off after reboots. If nothing changes, use Meta Quest Settings in Dioxamine (it sends the same command over ADB).</string>
+    <string name="prox_on_toast">Proximity sensor turned on</string>
+    <string name="prox_off_toast">Proximity sensor turned off</string>
     <string name="enabled_toast">Wireless debugging enabled</string>
     <string name="disabled_toast">Wireless debugging disabled</string>
     <string name="grant_title">Grant the permission once</string>

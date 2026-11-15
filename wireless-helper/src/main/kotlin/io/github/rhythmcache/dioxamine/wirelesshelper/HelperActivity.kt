@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor
 import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
 
 class HelperActivity : ComponentActivity() {
@@ -86,6 +87,9 @@ private fun HelperScreen(refreshTick: Int, onRefresh: () -> Unit) {
     // Same prefs file and key the shared BootReceiver reads.
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
     var status by remember { mutableStateOf(readStatus(context)) }
+    var proxSensorOn by remember {
+        mutableStateOf(!prefs.getBoolean(QuestProximitySensor.PREF_SENSOR_OFF, false))
+    }
     var enableOnBoot by remember {
         mutableStateOf(prefs.getBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, false))
     }
@@ -189,6 +193,46 @@ private fun HelperScreen(refreshTick: Int, onRefresh: () -> Unit) {
                 }
                 Switch(checked = status.wirelessEnabled, enabled = canUse, onCheckedChange = null)
             }
+            if (QuestProximitySensor.isQuestDevice) {
+                // Quest proximity ("light") sensor. Sent as a broadcast from this app and
+                // re-applied after every boot while it's set to off.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = proxSensorOn,
+                            role = Role.Switch,
+                            onValueChange = { on ->
+                                QuestProximitySensor.sendFromApp(context, sensorOn = on)
+                                    .onSuccess {
+                                        proxSensorOn = on
+                                        prefs.edit().putBoolean(QuestProximitySensor.PREF_SENSOR_OFF, !on).apply()
+                                        Toast.makeText(
+                                            context,
+                                            if (on) R.string.prox_on_toast else R.string.prox_off_toast,
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                    .onFailure {
+                                        Toast.makeText(context, it.message ?: it.toString(), Toast.LENGTH_LONG).show()
+                                    }
+                            },
+                        )
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(stringResource(R.string.prox_title), fontWeight = FontWeight.Medium)
+                        Text(
+                            stringResource(R.string.prox_subtitle),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = proxSensorOn, onCheckedChange = null)
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
 
             OutlinedButton(

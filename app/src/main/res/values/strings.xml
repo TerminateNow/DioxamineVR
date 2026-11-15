@@ -538,6 +538,14 @@
     <!-- ADB Reboot Options Strings -->
     <string name="adb_reboot_tile_title">Reboot Options</string>
     <string name="adb_reboot_tile_desc">Reboot to system, bootloader, recovery, fastboot, or power off</string>
+    <string name="meta_quest_tile_title">Meta Quest Settings</string>
+    <string name="meta_quest_tile_desc">Quest headset options applied over ADB, like the proximity (light) sensor</string>
+    <string name="meta_quest_sensor_title">Proximity (light) sensor</string>
+    <string name="meta_quest_sensor_desc">On: the display turns off when the headset is taken off. Off: the display stays on as if the headset is worn. Resets to on when the headset reboots (the Wireless Debugging Helper can keep it off).</string>
+    <string name="meta_quest_sensor_on_toast">Proximity sensor turned on</string>
+    <string name="meta_quest_sensor_off_toast">Proximity sensor turned off</string>
+    <string name="meta_quest_command_failed">Command failed: %1$s</string>
+    <string name="meta_quest_not_quest_warning">This does not look like a Meta Quest. These settings only work on Quest headsets.</string>
     <string name="wireless_helper_tile_title">Install Wireless Debugging Helper</string>
     <string name="wireless_helper_tile_desc">One tap: installs the helper on the connected device, grants its permission and opens it, so Wireless debugging turns on at every boot (Android 11+)</string>
     <string name="wireless_helper_tile_title_update">Update Wireless Debugging Helper</string>

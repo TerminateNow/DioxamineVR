@@ -16,6 +16,8 @@ import io.github.rhythmcache.dioxamine.adb.builtin.filemanager.FileManagerScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.filemanager.FileManagerTile
 import io.github.rhythmcache.dioxamine.adb.builtin.logcat.LogcatScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.logcat.LogcatTile
+import io.github.rhythmcache.dioxamine.adb.builtin.metaquest.MetaQuestScreen
+import io.github.rhythmcache.dioxamine.adb.builtin.metaquest.MetaQuestTile
 import io.github.rhythmcache.dioxamine.adb.builtin.misc.MiscScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.misc.MiscTile
 import io.github.rhythmcache.dioxamine.adb.builtin.packagemanager.PackageManagerScreen
@@ -44,6 +46,7 @@ sealed class BuiltInSubScreen {
     object Misc : BuiltInSubScreen()
     object Screenshot : BuiltInSubScreen()
     object Reboot : BuiltInSubScreen()
+    object MetaQuest : BuiltInSubScreen()
 }
 
 @Composable
@@ -76,6 +79,12 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
                 }
                 item {
                     WirelessHelperTile(vm = vm, isConnected = isConnected)
+                }
+                item {
+                    MetaQuestTile(
+                        isConnected = isConnected,
+                        onClick = { activeSubScreen = BuiltInSubScreen.MetaQuest }
+                    )
                 }
                 item {
                     DeviceInformationTile(
@@ -191,6 +200,12 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
         }
         BuiltInSubScreen.Screenshot -> {
             ScreencapScreen(
+                vm = vm,
+                onBack = { activeSubScreen = BuiltInSubScreen.TilesList }
+            )
+        }
+        BuiltInSubScreen.MetaQuest -> {
+            MetaQuestScreen(
                 vm = vm,
                 onBack = { activeSubScreen = BuiltInSubScreen.TilesList }
             )

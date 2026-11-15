@@ -317,6 +317,71 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
             .background(Color.Black)
             .imePadding() // Automatically positions extra keys right above the soft keyboard
     ) {
+        // -- Top bar: lives outside the terminal box so the remote can reach the menu
+        // (Up from the terminal) instead of it sitting on top of the terminal's focus area.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = activeConn?.label ?: "",
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f),
+            )
+            // Overflow options menu (Clear screen / Restart shell)
+            var showOverflowMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(
+                    onClick = { showOverflowMenu = true },
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Terminal options",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = showOverflowMenu,
+                    onDismissRequest = { showOverflowMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.btn_clear)) },
+                        leadingIcon = {
+                            Icon(Icons.Filled.DeleteOutline, contentDescription = null)
+                        },
+                        onClick = {
+                            showOverflowMenu = false
+                            shellVm.clearBuffer()
+                        },
+                    )
+                    if (sessionState == ShellSessionState.CLOSED || sessionState == ShellSessionState.ERROR) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.cd_restart_shell)) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.RestartAlt, contentDescription = null)
+                            },
+                            onClick = {
+                                showOverflowMenu = false
+                                val client = adbViewModel.activeClient()
+                                if (client != null && !client.isClosed) {
+                                    shellVm.startSession(activeDeviceId, client, supportsShellV2)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
         // -- Terminal surface (strictly bounded and clipped) --------
         var terminalStopFocused by remember { mutableStateOf(false) }
         Box(
@@ -379,58 +444,6 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
                 },
             )
 
-            // -- Overflow options menu (Clear screen / Restart shell) --
-            var showOverflowMenu by remember { mutableStateOf(false) }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-            ) {
-                IconButton(
-                    onClick = { showOverflowMenu = true },
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(Color.Black.copy(alpha = 0.45f), CircleShape),
-                ) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Terminal options",
-                        tint = Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = showOverflowMenu,
-                    onDismissRequest = { showOverflowMenu = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.btn_clear)) },
-                        leadingIcon = {
-                            Icon(Icons.Filled.DeleteOutline, contentDescription = null)
-                        },
-                        onClick = {
-                            showOverflowMenu = false
-                            shellVm.clearBuffer()
-                        },
-                    )
-                    if (sessionState == ShellSessionState.CLOSED || sessionState == ShellSessionState.ERROR) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.cd_restart_shell)) },
-                            leadingIcon = {
-                                Icon(Icons.Filled.RestartAlt, contentDescription = null)
-                            },
-                            onClick = {
-                                showOverflowMenu = false
-                                val client = adbViewModel.activeClient()
-                                if (client != null && !client.isClosed) {
-                                    shellVm.startSession(activeDeviceId, client, supportsShellV2)
-                                }
-                            },
-                        )
-                    }
-                }
-            }
         }
 
         // -- Error banner ------------------------------------------

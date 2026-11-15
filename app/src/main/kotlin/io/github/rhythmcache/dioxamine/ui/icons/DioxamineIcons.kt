@@ -3,6 +3,8 @@ package io.github.rhythmcache.dioxamine.ui.icons
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,34 @@ object DioxamineIcons {
             "M10 7.4a.9.9 0 0 1 .9.9v4.3a.9.9 0 0 1-1.8 0V8.3a.9.9 0 0 1 .9-.9z" to false,
             "M12.5 9.1a.9.9 0 0 1 .9.9v2.6a.9.9 0 0 1-1.8 0V10a.9.9 0 0 1 .9-.9z" to false,
         )
+    }
+
+    /**
+     * Meta logo: the looped "infinity" mark, drawn as a single rounded 2.2-wide stroke (the
+     * same visual weight as the stock icons' outlines) so it tints like any other icon.
+     */
+    val MetaLogo: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "MetaLogo",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            addPath(
+                pathData = addPathNodes(
+                    "M5.2 17.3C3.3 17.3 2.1 15.7 2.1 13.4C2.1 9.6 4.4 5.7 7.3 5.7" +
+                        "C9.4 5.7 10.8 7.8 12.6 11.2C14.3 14.6 15.6 17.3 18.4 17.3" +
+                        "C20.6 17.3 21.9 15.6 21.9 13.3C21.9 9.4 19.4 5.7 16.6 5.7" +
+                        "C14.5 5.7 13.1 7.9 11.4 11.2C9.7 14.6 8 17.3 5.2 17.3Z"
+                ),
+                fill = null,
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2.2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            )
+        }.build()
     }
 
     private fun icon(name: String, vararg paths: Pair<String, Boolean>): ImageVector =
