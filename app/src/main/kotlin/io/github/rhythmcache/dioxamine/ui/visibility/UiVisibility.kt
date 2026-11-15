@@ -32,7 +32,9 @@ object UiVisibility {
     }
 
     val allIds: List<String> = buildList {
-        fun walk(nodes: List<VisNode>) = nodes.forEach { add(it.id); walk(it.children) }
+        fun walk(nodes: List<VisNode>) {
+            nodes.forEach { add(it.id); walk(it.children) }
+        }
         walk(AppSections)
     }
 
