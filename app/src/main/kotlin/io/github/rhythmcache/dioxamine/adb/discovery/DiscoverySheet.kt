@@ -84,6 +84,8 @@ fun DiscoveryDialog(
                 when (val s = step) {
                     is DiscoveryStep.DeviceList -> DeviceListStep(
                         discoveryVm = discoveryVm,
+                        favoriteHost = vm.favoriteHost,
+                        onToggleFavorite = { host -> vm.toggleFavoriteHost(host) },
                         onDismiss = onDismiss,
                         onManualEntry = { step = DiscoveryStep.ManualChooseType },
                         onDeviceSelected = { device ->
@@ -165,6 +167,8 @@ fun DiscoverySheet(
 @Composable
 private fun DeviceListStep(
     discoveryVm: AdbDiscoveryViewModel,
+    favoriteHost: String?,
+    onToggleFavorite: (String) -> Unit,
     onDismiss: () -> Unit,
     onManualEntry: () -> Unit,
     onDeviceSelected: (DiscoveredAdbDevice) -> Unit
@@ -190,6 +194,20 @@ private fun DeviceListStep(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        if (favoriteHost != null) {
+            Spacer(Modifier.height(8.dp))
+            // Shown even when the favorite isn't on the network right now, so it can always be cleared.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.discovery_favorite_label, favoriteHost),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                FavoriteStarButton(isFavorite = true, onClick = { onToggleFavorite(favoriteHost) })
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -220,7 +238,12 @@ private fun DeviceListStep(
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(devices) { device ->
-                        DiscoveredDeviceRow(device, onClick = { onDeviceSelected(device) })
+                        DiscoveredDeviceRow(
+                            device,
+                            isFavorite = device.host == favoriteHost,
+                            onToggleFavorite = { onToggleFavorite(device.host) },
+                            onClick = { onDeviceSelected(device) }
+                        )
                         HorizontalDivider()
                     }
                 }
@@ -241,31 +264,53 @@ private fun DeviceListStep(
 }
 
 @Composable
-private fun DiscoveredDeviceRow(device: DiscoveredAdbDevice, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(device.serviceName, style = MaterialTheme.typography.bodyMedium)
-            Text("${device.host}:${device.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        AssistChip(
-            onClick = {},
-            enabled = false,
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-            label = {
-                Text(
-                    when (device.type) {
-                        AdbServiceType.TLS_CONNECT -> "TLS"
-                        AdbServiceType.TLS_PAIRING -> "Pairing"
-                        AdbServiceType.TCP -> "TCP"
-                    },
-                    style = MaterialTheme.typography.labelSmall
-                )
+private fun DiscoveredDeviceRow(
+    device: DiscoveredAdbDevice,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onClick: () -> Unit
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.weight(1f).clickable(onClick = onClick).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(device.serviceName, style = MaterialTheme.typography.bodyMedium)
+                Text("${device.host}:${device.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            AssistChip(
+                onClick = {},
+                enabled = false,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                label = {
+                    Text(
+                        when (device.type) {
+                            AdbServiceType.TLS_CONNECT -> "TLS"
+                            AdbServiceType.TLS_PAIRING -> "Pairing"
+                            AdbServiceType.TCP -> "TCP"
+                        },
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            )
+        }
+        FavoriteStarButton(isFavorite = isFavorite, onClick = onToggleFavorite)
+    }
+}
+
+/** Filled star = the one favorite IP auto-connected on every launch; outlined = tap to make favorite. */
+@Composable
+private fun FavoriteStarButton(isFavorite: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+            contentDescription = stringResource(
+                if (isFavorite) R.string.discovery_cd_unfavorite else R.string.discovery_cd_favorite
+            ),
+            tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbDetector
+import io.github.rhythmcache.dioxamine.adb.discovery.AdbServiceType
 import io.github.rhythmcache.dioxamine.adb.discovery.WirelessAutoConnector
 import io.github.rhythmcache.dioxamine.scrcpy.ScrcpyDiscoveryCache
 import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
@@ -121,14 +122,30 @@ class AdbViewModel(
         }
     }
 
-    // -- Auto-connect to known Wireless debugging devices -------------------------------------
+    // -- Favorite host and auto-connect -------------------------------------------------------
     //
     // Wireless debugging picks a new port every time it is turned on (e.g. after the headset
-    // reboots), so the saved "host:port" is useless. Instead we remember the serial of every device
-    // we connected to over TLS and, on app start / return to foreground / a dropped TLS connection,
-    // watch mDNS for `adb-<serial>-*` connect services and connect to the advertised port.
+    // reboots), so a saved "host:port" goes stale. On app start / return to foreground / a dropped
+    // TLS connection we watch mDNS for ADB connect services and connect to the advertised port:
+    //  - if the user starred a favorite IP in Discover Devices, only that IP is used;
+    //  - otherwise (and if enabled in Settings) any device whose serial we connected to over TLS
+    //    before, matched via the `adb-<serial>-*` service name.
+    // Only one ADB connection is kept at a time (see [disconnectOthers]), so auto-connect never
+    // runs while a device is already connected or connecting.
 
-    /** True while the mDNS watch for known wireless devices is running. */
+    /** The starred IP that is auto-connected on app start (port found via mDNS), or null. */
+    var favoriteHost by mutableStateOf(context?.let { FavoriteAdbHost.get(it) })
+        private set
+
+    /** Makes [host] the single favorite, or clears the favorite when it already is (or [host] is null). */
+    fun toggleFavoriteHost(host: String?) {
+        val ctx = context ?: return
+        val newValue = if (host == null || host == favoriteHost) null else host
+        FavoriteAdbHost.set(ctx, newValue)
+        favoriteHost = newValue
+    }
+
+    /** True while the mDNS watch for the favorite / known wireless devices is running. */
     var wirelessAutoConnecting by mutableStateOf(false)
         private set
 
@@ -139,25 +156,40 @@ class AdbViewModel(
     private fun isConnectedOrConnecting(conn: DeviceConnection) =
         conn.state is ConnectionState.Connected || conn.state is ConnectionState.Connecting
 
-    /** Safe to call repeatedly; does nothing if disabled, already running, or nothing is known. */
+    private fun anyDeviceBusy() = devices.values.any { isConnectedOrConnecting(it) }
+
+    /** Safe to call repeatedly; does nothing if a device is already connected, or nothing to look for. */
     fun startWirelessAutoConnect() {
         val ctx = context ?: return
-        if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
         if (wirelessAutoConnectJob?.isActive == true) return
-        val known = KnownWirelessDevices.getAll(ctx).toSet()
-        if (known.isEmpty()) return
-        val pending = known.filter { serial ->
-            devices.values.none { it.uniqueId == serial && isConnectedOrConnecting(it) }
+        if (anyDeviceBusy()) return
+
+        val favorite = favoriteHost
+        if (favorite != null && FavoriteAdbHost.isLocalhost(favorite)) {
+            // This device's own adbd isn't advertised over mDNS; probe its local port instead.
+            viewModelScope.launch(Dispatchers.IO) {
+                val target = LocalAdbDetector.detect() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!anyDeviceBusy()) connectTcpDirect("127.0.0.1", target.port)
+                }
+            }
+            return
         }
-        if (pending.isEmpty()) return
+
+        val known: Set<String> = if (favorite == null) {
+            if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
+            KnownWirelessDevices.getAll(ctx).toSet().ifEmpty { return }
+        } else {
+            emptySet()
+        }
         val connector = wirelessAutoConnector ?: return
 
         wirelessAutoConnectAttempted.clear()
         wirelessAutoConnecting = true
-        AppLogger.i("ADB_VM", "Looking for known wireless devices: $pending")
-        connector.start { deviceId, host, port ->
+        AppLogger.i("ADB_VM", "Auto-connect: looking for " + (favorite?.let { "favorite $it" } ?: "known devices $known"))
+        connector.start { service ->
             viewModelScope.launch(Dispatchers.Main) {
-                onWirelessServiceFound(known, deviceId, host, port)
+                onAutoConnectServiceFound(favorite, known, service)
             }
         }
         wirelessAutoConnectJob = viewModelScope.launch(Dispatchers.Main) {
@@ -166,10 +198,7 @@ class AdbViewModel(
                 // Wi-Fi and turn Wireless debugging back on.
                 val deadline = System.currentTimeMillis() + WIRELESS_AUTOCONNECT_WINDOW_MS
                 while (isActive && System.currentTimeMillis() < deadline) {
-                    val allFound = known.all { serial ->
-                        devices.values.any { it.uniqueId == serial && it.state is ConnectionState.Connected }
-                    }
-                    if (allFound) break
+                    if (devices.values.any { it.state is ConnectionState.Connected }) break
                     kotlinx.coroutines.delay(1000)
                 }
             } finally {
@@ -179,26 +208,36 @@ class AdbViewModel(
         }
     }
 
-    private fun onWirelessServiceFound(known: Set<String>, deviceId: String, host: String, port: Int) {
-        if (deviceId !in known) return
-        val key = "$host:$port"
-        if (!wirelessAutoConnectAttempted.add(key)) return
-        if (devices.values.any { it.uniqueId == deviceId && isConnectedOrConnecting(it) }) return
-        if (devices["tls:$key"]?.let { isConnectedOrConnecting(it) } == true) return
-
-        AppLogger.i("ADB_VM", "Known wireless device $deviceId found at $key, connecting")
-        connectTls(host, port) { success, _ ->
-            if (success) {
-                // Drop stale entries left over from the device's previous port.
-                devices.entries
-                    .filter { (id, conn) ->
-                        id != "tls:$key" && conn.state is ConnectionState.Error &&
-                            (conn.uniqueId == deviceId || id.startsWith("tls:$host:"))
-                    }
-                    .map { it.key }
-                    .forEach { devices.remove(it); ScrcpyDiscoveryCache.clear(it) }
-            }
+    private fun onAutoConnectServiceFound(
+        favorite: String?,
+        known: Set<String>,
+        service: WirelessAutoConnector.FoundService
+    ) {
+        if (anyDeviceBusy()) return
+        val host: String
+        if (favorite != null) {
+            if (favorite !in service.hosts) return
+            host = favorite
+        } else {
+            if (service.type != AdbServiceType.TLS_CONNECT || service.deviceId !in known) return
+            host = service.hosts.first()
         }
+        if (!wirelessAutoConnectAttempted.add("${service.type}|$host:${service.port}")) return
+
+        AppLogger.i("ADB_VM", "Auto-connect: ${service.deviceId} found at $host:${service.port} (${service.type})")
+        when (service.type) {
+            AdbServiceType.TLS_CONNECT -> connectTls(host, service.port)
+            AdbServiceType.TCP -> connectTcpDirect(host, service.port)
+            AdbServiceType.TLS_PAIRING -> Unit
+        }
+    }
+
+    /**
+     * Only one ADB connection is kept at a time: once [keepId] has connected, every other device
+     * (connected, connecting or failed) is disconnected and removed.
+     */
+    private fun disconnectOthers(keepId: String) {
+        devices.keys.filter { it != keepId }.forEach { disconnect(it) }
     }
 
     private fun rememberWirelessDevice(serial: String?) {
@@ -221,6 +260,8 @@ class AdbViewModel(
         val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
         val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
         if (!detectEnabled || !autoConnect || isLocalhostConnected()) return
+        // Only one ADB connection at a time: don't replace a device the user is already using.
+        if (anyDeviceBusy()) return
         val target = LocalAdbDetector.detect() ?: return
         connectTcpDirect("127.0.0.1", target.port)
     }
@@ -334,7 +375,8 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -376,7 +418,8 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -431,7 +474,8 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: serial
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, defaultLabel, DeviceTransport.USB, null, ConnectionState.Error(e.message ?: "USB connection failed"))
             }
@@ -467,7 +511,8 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
                 rememberWirelessDevice(details.uniqueId)
                 onResult?.invoke(true, null)
             } catch (e: io.github.rhythmcache.adb.AdbException.NotPaired) {
@@ -506,11 +551,13 @@ class AdbViewModel(
 
     fun disconnect(id: String) {
         val conn = devices[id] ?: return
+        // Remove first so the health monitor can't mistake the closing client for a dropped
+        // connection and auto-reconnect it.
+        devices.remove(id)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try { conn.client?.close() } catch (_: Exception) {}
             }
-            devices.remove(id)
             ScrcpyDiscoveryCache.clear(id)
             nativeOutputs.clear()
             runningCommands.clear()
