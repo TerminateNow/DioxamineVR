@@ -135,6 +135,29 @@ suspend fun AdbClient.executeShell(command: String, supportsShellV2: Boolean): S
     }
 }
 
+enum class HelperInstallStep { INSTALLING, GRANTING, LAUNCHING }
+
+/** Whether the headset helper is on the connected device, compared with the copy bundled in this app. */
+sealed class HelperAppStatus {
+    object Unknown : HelperAppStatus()
+    object Checking : HelperAppStatus()
+    /** Connected device is older than Android 11, which has no Wireless debugging. */
+    object Unsupported : HelperAppStatus()
+    /** This build doesn't contain the helper APK. */
+    object NotBundled : HelperAppStatus()
+    data class NotInstalled(val bundledVersion: Long) : HelperAppStatus()
+    data class UpdateAvailable(val installedVersion: Long, val bundledVersion: Long) : HelperAppStatus()
+    data class UpToDate(val installedVersion: Long) : HelperAppStatus()
+}
+
+sealed class HelperInstallState {
+    object Idle : HelperInstallState()
+    data class Running(val step: HelperInstallStep, val progress: Float) : HelperInstallState()
+    /** [launched] is false when install and grant worked but `am start` did not. */
+    data class Success(val launched: Boolean) : HelperInstallState()
+    data class Error(val message: String) : HelperInstallState()
+}
+
 sealed class FlashUiState {
     object Idle : FlashUiState()
     data class Running(val percent: Float, val bytesTransferred: Long, val totalBytes: Long) : FlashUiState()

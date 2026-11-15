@@ -3,6 +3,14 @@ package io.github.rhythmcache.dioxamine.adb.shell
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import io.github.rhythmcache.dioxamine.ui.tv.isSelectKey
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -104,11 +112,13 @@ private fun RegularKeyCell(
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
+    val source = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .fillMaxHeight()
+            .keyFocusOutline(source)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = source,
                 indication = ripple(color = Color.White),
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -137,11 +147,29 @@ private fun RepeatableKeyCell(
     val coroutineScope = rememberCoroutineScope()
     val view = LocalView.current
     var isPressed by remember { mutableStateOf(false) }
+    val source = remember { MutableInteractionSource() }
 
     Box(
         modifier = modifier
             .fillMaxHeight()
             .background(if (isPressed) Color(0xFF333333) else Color.Transparent)
+            .keyFocusOutline(source)
+            // Remote / D-pad: Select sends the key; holding Select repeats it (key auto-repeat).
+            .onKeyEvent { event ->
+                if (!isSelectKey(event.nativeKeyEvent.keyCode)) return@onKeyEvent false
+                when (event.type) {
+                    KeyEventType.KeyDown -> {
+                        isPressed = true
+                        if (event.nativeKeyEvent.repeatCount == 0) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
+                        currentOnPress()
+                    }
+                    KeyEventType.KeyUp -> isPressed = false
+                }
+                true
+            }
+            .focusable(interactionSource = source)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -186,6 +214,8 @@ private fun ModifierKeyCell(
     val currentOnToggle by rememberUpdatedState(onToggle)
     val currentOnLock by rememberUpdatedState(onLock)
     val view = LocalView.current
+    val source = remember { MutableInteractionSource() }
+    var longPressFired by remember { mutableStateOf(false) }
 
     val bgColor = when (state) {
         ModifierState.OFF -> Color.Transparent
@@ -207,6 +237,31 @@ private fun ModifierKeyCell(
         modifier = modifier
             .fillMaxHeight()
             .background(bgColor)
+            .keyFocusOutline(source)
+            // Remote / D-pad: Select toggles (one-shot); holding Select locks it.
+            .onKeyEvent { event ->
+                if (!isSelectKey(event.nativeKeyEvent.keyCode)) return@onKeyEvent false
+                when (event.type) {
+                    KeyEventType.KeyDown -> {
+                        if (event.nativeKeyEvent.repeatCount == 0) {
+                            longPressFired = false
+                        } else if (!longPressFired) {
+                            longPressFired = true
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            currentOnLock()
+                        }
+                    }
+                    KeyEventType.KeyUp -> {
+                        if (!longPressFired) {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            currentOnToggle()
+                        }
+                        longPressFired = false
+                    }
+                }
+                true
+            }
+            .focusable(interactionSource = source)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = {
@@ -241,4 +296,15 @@ private fun ModifierKeyCell(
             }
         }
     }
+}
+
+/** Thin white outline on the key the remote is on (the panel is black, so this stays visible). */
+@Composable
+private fun Modifier.keyFocusOutline(source: MutableInteractionSource): Modifier {
+    val focused by source.collectIsFocusedAsState()
+    return this.border(
+        width = 2.dp,
+        color = if (focused) Color.White.copy(alpha = 0.9f) else Color.Transparent,
+        shape = RoundedCornerShape(4.dp)
+    )
 }

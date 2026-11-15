@@ -1,5 +1,12 @@
 package io.github.rhythmcache.dioxamine.plugin
 
+import io.github.rhythmcache.dioxamine.ui.tv.Button
+import io.github.rhythmcache.dioxamine.ui.tv.DropdownMenuItem
+import io.github.rhythmcache.dioxamine.ui.tv.FilledTonalButton
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedTextField
+import io.github.rhythmcache.dioxamine.ui.tv.TextButton
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -57,13 +64,19 @@ import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.core.formatFileSize
 import kotlinx.coroutines.launch
 import java.io.File
+import io.github.rhythmcache.dioxamine.ui.visibility.AllSectionsHiddenHint
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 
 enum class PluginTopTab(
     @StringRes val labelRes: Int,
     val icon: ImageVector,
 ) {
     INSTALLED(R.string.plugins_tab_installed, Icons.Filled.Extension),
-    BROWSE(R.string.plugins_tab_browse, Icons.Filled.Search),
+    BROWSE(R.string.plugins_tab_browse, Icons.Filled.Search);
+
+    val visId: String
+        get() = if (this == INSTALLED) VisIds.PLUGINS_INSTALLED else VisIds.PLUGINS_BROWSE
 }
 
 @Composable
@@ -142,6 +155,11 @@ fun PluginsTab(
         }
 
     var selectedTopTab by rememberSaveable { mutableStateOf(PluginTopTab.INSTALLED) }
+    // Segments not hidden in Settings > Appearance.
+    val visibleTopTabs = PluginTopTab.entries.filter { UiVisibility.isShown(it.visId) }
+    LaunchedEffect(visibleTopTabs) {
+        if (selectedTopTab !in visibleTopTabs && visibleTopTabs.isNotEmpty()) selectedTopTab = visibleTopTabs.first()
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
@@ -166,7 +184,7 @@ fun PluginsTab(
                         .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                PluginTopTab.entries.forEach { tab ->
+                visibleTopTabs.forEach { tab ->
                     val isSelected = selectedTopTab == tab
                     val backgroundColor by animateColorAsState(
                         targetValue =
@@ -217,6 +235,11 @@ fun PluginsTab(
                     }
                 }
             }
+        }
+
+        if (visibleTopTabs.isEmpty()) {
+            AllSectionsHiddenHint()
+            return@Column
         }
 
         Box(modifier = Modifier.fillMaxSize()) {

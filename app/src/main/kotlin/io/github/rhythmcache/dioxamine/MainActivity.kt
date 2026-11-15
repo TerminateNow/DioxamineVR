@@ -10,7 +10,38 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.annotation.StringRes
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.foundation.focusGroup
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -47,11 +78,27 @@ import java.io.File
 
 enum class Tab(@StringRes val labelRes: Int, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     ADB(R.string.tab_adb, Icons.Filled.PhoneAndroid),
-    SCRCPY(R.string.tab_scrcpy, Icons.AutoMirrored.Filled.ScreenShare),
+    SCRCPY(R.string.tab_scrcpy, io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.VrHeadset),
     FASTBOOT(R.string.tab_fastboot, Icons.Filled.Bolt),
     PLUGINS(R.string.tab_plugins, Icons.Filled.Extension),
-    SETTINGS(R.string.tab_settings, Icons.Filled.Settings)
+    SETTINGS(R.string.tab_settings, Icons.Filled.Settings);
+
+    /** Id in Settings > Appearance > Hide/Show Sections; null = can't be hidden (Settings). */
+    val visId: String?
+        get() = when (this) {
+            ADB -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_ADB
+            SCRCPY -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_SCRCPY
+            FASTBOOT -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_FASTBOOT
+            PLUGINS -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_PLUGINS
+            SETTINGS -> null
+        }
+
+    val isShown: Boolean
+        get() = visId?.let { io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility.isShown(it) } ?: true
 }
+
+/** Tabs currently shown on the side rail (Settings is always there). */
+fun visibleTabs(): List<Tab> = Tab.entries.filter { it.isShown }
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -85,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         installSplashScreen()
         enableEdgeToEdge()
 
+        io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility.init(this)
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         if (prefs.getBoolean("keep_alive_enabled", false)) {
             DioxForegroundService.start(this)
@@ -134,8 +182,42 @@ fun DioxamineApp(keyDir: File) {
             return AdbViewModel(keyDir, context.applicationContext) as T
         }
     })
+    // Each time the app comes to the foreground (including first launch), look for known
+    // Wireless debugging devices on their current port and reconnect to them.
+    DisposableEffect(context) {
+        var ctx: Context? = context
+        while (ctx is android.content.ContextWrapper && ctx !is androidx.lifecycle.LifecycleOwner) {
+            ctx = ctx.baseContext
+        }
+        val lifecycle = (ctx as? androidx.lifecycle.LifecycleOwner)?.lifecycle
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> vm.onAppForeground()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> vm.onAppBackground()
+                else -> Unit
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose { lifecycle?.removeObserver(observer) }
+    }
     val fastbootVm: FastbootViewModel = viewModel()
     val scrcpyVm: ScrcpyViewModel = viewModel()
+
+    // "Auto-start mirroring" (Settings > Scrcpy): whenever a device becomes connected, including a
+    // reconnect after a dropped connection (Connected -> Connecting/Error -> Connected), open the
+    // scrcpy tab and ask it to start mirroring.
+    val connectedDeviceId = vm.activeDeviceId?.takeIf {
+        vm.devices[it]?.state is io.github.rhythmcache.dioxamine.core.ConnectionState.Connected
+    }
+    LaunchedEffect(connectedDeviceId) {
+        if (connectedDeviceId == null || scrcpyVm.isMirroring) return@LaunchedEffect
+        val autoStart = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getBoolean("scrcpy_auto_start", false)
+        if (autoStart && Tab.SCRCPY.isShown) {
+            selectedTab = Tab.SCRCPY
+            scrcpyVm.autoStartRequested = true
+        }
+    }
 
     val coroutineScope = rememberCoroutineScope()
     val pluginRepo = remember { io.github.rhythmcache.dioxamine.plugin.PluginRepository(context.applicationContext, coroutineScope) }
@@ -189,11 +271,46 @@ fun DioxamineApp(keyDir: File) {
         derivedStateOf { imeInsets.getBottom(density) > 0 }
     }
     val isFullScreen = isScrcpyFullScreen || isPluginActive
-    val hideBottomBar = isFullScreen || isImeVisible
+    val hideSideRail = isFullScreen
 
-    // Navigate back to ADB home tab before exiting app
-    BackHandler(enabled = selectedTab != Tab.ADB && !hideBottomBar) {
-        selectedTab = Tab.ADB
+    // Side rail focus state: expanded (icon + label) while D-pad focus is on the rail,
+    // collapsed to icons only while focus is inside the page content.
+    // The rail only opens via remote Back or pressing Left from the page edge.
+    val tabFocusRequesters = remember { Tab.entries.associateWith { FocusRequester() } }
+    val contentFocusRequester = remember { FocusRequester() }
+    var railHasFocus by remember { mutableStateOf(false) }
+    var contentHasFocus by remember { mutableStateOf(false) }
+    val inputModeManager = LocalInputModeManager.current
+    val usingDpad = inputModeManager.inputMode == InputMode.Keyboard
+
+    // On launch with a remote/D-pad, put focus on the page (not the rail) so the remote works
+    // immediately. Only if the page has nothing focusable does focus fall back to the rail.
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(150)
+        if (inputModeManager.inputMode == InputMode.Keyboard) {
+            runCatching { contentFocusRequester.requestFocus() }
+            kotlinx.coroutines.delay(100)
+            if (!contentHasFocus && !railHasFocus) {
+                runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
+            }
+        }
+    }
+
+    // Hidden tabs (Settings > Appearance): never leave a hidden tab selected.
+    val homeTab = visibleTabs().first()
+    LaunchedEffect(selectedTab.isShown) {
+        if (!selectedTab.isShown) selectedTab = homeTab
+    }
+
+    // Navigate back to the first (home) tab before exiting app
+    BackHandler(enabled = selectedTab != homeTab && !hideSideRail) {
+        selectedTab = homeTab
+    }
+
+    // Remote "Back" from inside a page returns focus to the side rail first.
+    // (Screens' own back handlers, e.g. closing a sub-page, still take priority.)
+    BackHandler(enabled = usingDpad && !railHasFocus && !hideSideRail) {
+        runCatching { tabFocusRequesters.getValue(selectedTab).requestFocus() }
     }
 
     // Exit Scrcpy fullscreen on back gesture
@@ -201,22 +318,7 @@ fun DioxamineApp(keyDir: File) {
         isScrcpyFullScreen = false
     }
 
-    Scaffold(
-        bottomBar = {
-            if (!hideBottomBar) {
-                NavigationBar {
-                    Tab.entries.forEach { tab ->
-                        NavigationBarItem(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
-                            icon = { Icon(tab.icon, contentDescription = stringResource(tab.labelRes)) },
-                            label = { Text(stringResource(tab.labelRes)) }
-                        )
-                    }
-                }
-            }
-        }
-    ) { padding ->
+    Scaffold { padding ->
         val layoutDirection = LocalLayoutDirection.current
         val contentPadding = remember(padding, isImeVisible, layoutDirection) {
             if (isImeVisible) {
@@ -230,7 +332,7 @@ fun DioxamineApp(keyDir: File) {
                 padding
             }
         }
-        Box(
+        Row(
             modifier = if (isFullScreen) {
                 Modifier.fillMaxSize()
             } else {
@@ -240,6 +342,29 @@ fun DioxamineApp(keyDir: File) {
                     .fillMaxSize()
             }
         ) {
+            if (!hideSideRail) {
+                SideTabRail(
+                    selectedTab = selectedTab,
+                    expanded = railHasFocus,
+                    focusRequesters = tabFocusRequesters,
+                    onFocusChanged = { railHasFocus = it },
+                    onSelect = { selectedTab = it }
+                )
+            }
+            // Quick fade-in when switching tabs (old page is not kept alive, so no overlap cost).
+            val pageAlpha = remember(selectedTab) { Animatable(0f) }
+            LaunchedEffect(selectedTab) {
+                pageAlpha.animateTo(1f, tween(durationMillis = 180, easing = LinearOutSlowInEasing))
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .graphicsLayer { alpha = pageAlpha.value }
+                    .focusRequester(contentFocusRequester)
+                    .onFocusChanged { contentHasFocus = it.hasFocus }
+                    .focusGroup()
+            ) {
             when (selectedTab) {
                 Tab.ADB -> AdbScreen(vm)
                 Tab.SCRCPY -> ScrcpyScreen(vm, scrcpyVm = scrcpyVm, onFullScreenChange = { isScrcpyFullScreen = it })
@@ -255,6 +380,138 @@ fun DioxamineApp(keyDir: File) {
                 )
                 Tab.SETTINGS -> SettingsScreen(vm)
             }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Left-side tab rail (TV / D-pad friendly)
+// ---------------------------------------------------------------------------
+
+private val RailExpandedWidth = 132.dp   // 66% of the original 200dp
+private val RailCollapsedWidth = 60.dp   // 75% of the original 80dp
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SideTabRail(
+    selectedTab: Tab,
+    expanded: Boolean,
+    focusRequesters: Map<Tab, FocusRequester>,
+    onFocusChanged: (Boolean) -> Unit,
+    onSelect: (Tab) -> Unit,
+) {
+    val width by animateDpAsState(
+        targetValue = if (expanded) RailExpandedWidth else RailCollapsedWidth,
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        label = "railWidth"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(width)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .onFocusChanged { onFocusChanged(it.hasFocus) }
+            // The rail can only be entered by pressing Left (lands on the selected tab) or by a
+            // direct request (remote Back). Up/Down/Right from the page never wander into it.
+            .focusProperties {
+                onEnter = {
+                    when (requestedFocusDirection) {
+                        FocusDirection.Left -> focusRequesters.getValue(selectedTab).requestFocus()
+                        FocusDirection.Enter -> Unit
+                        else -> cancelFocusChange()
+                    }
+                }
+            }
+            .focusGroup()
+            .selectableGroup()
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+        // Tab buttons are centered vertically on the rail
+        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)
+    ) {
+        visibleTabs().forEach { tab ->
+            SideTabRailItem(
+                tab = tab,
+                selected = tab == selectedTab,
+                expanded = expanded,
+                modifier = Modifier.focusRequester(focusRequesters.getValue(tab)),
+                onClick = { onSelect(tab) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SideTabRailItem(
+    tab: Tab,
+    selected: Boolean,
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val colors = MaterialTheme.colorScheme
+    val label = stringResource(tab.labelRes)
+
+    // Strong, TV-visible focus highlight; a softer pill marks the selected tab.
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            focused -> colors.primary
+            selected -> colors.secondaryContainer
+            else -> Color.Transparent
+        },
+        label = "railItemContainer"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            focused -> colors.onPrimary
+            selected -> colors.onSecondaryContainer
+            else -> colors.onSurfaceVariant
+        },
+        label = "railItemContent"
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(containerColor)
+            .selectable(
+                selected = selected,
+                interactionSource = interactionSource,
+                indication = ripple(),
+                role = Role.Tab,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = tab.icon,
+            contentDescription = label,
+            tint = contentColor,
+            modifier = Modifier.size(24.dp)
+        )
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(durationMillis = 140, delayMillis = 60)),
+            exit = fadeOut(tween(durationMillis = 80))
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = label,
+                color = contentColor,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip
+            )
+          }
         }
     }
 }

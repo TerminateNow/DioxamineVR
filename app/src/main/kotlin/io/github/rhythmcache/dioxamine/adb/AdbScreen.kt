@@ -1,5 +1,12 @@
 package io.github.rhythmcache.dioxamine.adb
 
+import io.github.rhythmcache.dioxamine.ui.tv.Button
+import io.github.rhythmcache.dioxamine.ui.tv.DropdownMenuItem
+import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedTextField
+import io.github.rhythmcache.dioxamine.ui.tv.TextButton
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
@@ -25,6 +32,9 @@ import androidx.compose.ui.unit.dp
 import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.adb.builtin.BuiltInActionsTab
 import io.github.rhythmcache.dioxamine.adb.discovery.DiscoverySheet
+import io.github.rhythmcache.dioxamine.ui.visibility.AllSectionsHiddenHint
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 import io.github.rhythmcache.dioxamine.adb.discovery.QrPairingScreen
 import io.github.rhythmcache.dioxamine.adb.shell.ShellScreen
 import io.github.rhythmcache.dioxamine.core.*
@@ -39,9 +49,18 @@ fun AdbScreen(
     val activeConn = vm.devices[vm.activeDeviceId]
     val mode = activeConn?.mode ?: AdbDeviceMode.UNKNOWN
 
-    // Return to Built-in sub-tab when on Shell tab
-    BackHandler(enabled = subTab != 0) {
-        subTab = 0
+    // Sub-tabs that aren't hidden in Settings > Appearance (0 = Built-in, 1 = ADB Shell).
+    val visibleSubTabs = listOfNotNull(
+        0.takeIf { UiVisibility.isShown(VisIds.ADB_BUILTIN) },
+        1.takeIf { UiVisibility.isShown(VisIds.ADB_SHELL) },
+    )
+    LaunchedEffect(visibleSubTabs) {
+        if (subTab !in visibleSubTabs && visibleSubTabs.isNotEmpty()) subTab = visibleSubTabs.first()
+    }
+
+    // Return to the first sub-tab when on another one
+    BackHandler(enabled = visibleSubTabs.isNotEmpty() && subTab != visibleSubTabs.first()) {
+        subTab = visibleSubTabs.first()
     }
 
     vm.daemonDialogMessage?.let { msg ->
@@ -68,14 +87,22 @@ fun AdbScreen(
                 RescueScreen(vm)
             }
             else -> {
-                PrimaryTabRow(selectedTabIndex = subTab) {
-                    Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text(stringResource(R.string.adb_subtab_builtin)) })
-                    Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text(stringResource(R.string.adb_subtab_adb_shell)) })
-                }
+                if (visibleSubTabs.isEmpty()) {
+                    AllSectionsHiddenHint()
+                } else {
+                    PrimaryTabRow(selectedTabIndex = visibleSubTabs.indexOf(subTab).coerceAtLeast(0)) {
+                        if (0 in visibleSubTabs) {
+                            Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text(stringResource(R.string.adb_subtab_builtin)) })
+                        }
+                        if (1 in visibleSubTabs) {
+                            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text(stringResource(R.string.adb_subtab_adb_shell)) })
+                        }
+                    }
 
-                when (subTab) {
-                    0 -> BuiltInActionsTab(vm)
-                    1 -> ShellScreen(vm)
+                    when (subTab) {
+                        0 -> BuiltInActionsTab(vm)
+                        1 -> ShellScreen(vm)
+                    }
                 }
             }
         }
@@ -89,6 +116,33 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
     var showDiscoverySheet by remember { mutableStateOf(false) }
     var showAddTcpDialog by remember { mutableStateOf(false) }
     var showQrPairing by remember { mutableStateOf(false) }
+
+    // On app launch, open Discover Devices straight away if nothing is connected.
+    // A short grace period lets USB devices that are already plugged in finish connecting first.
+    // If a known Wireless debugging device is being looked for, give it a few seconds to be
+    // found and connected before falling back to the sheet; close the sheet if it connects later.
+    var discoveryOpenedAtStartup by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!vm.startupDiscoveryHandled) {
+            vm.startupDiscoveryHandled = true
+            kotlinx.coroutines.delay(800)
+            val waitUntil = System.currentTimeMillis() + 8000
+            while (vm.wirelessAutoConnecting && !vm.hasActiveDevice() && System.currentTimeMillis() < waitUntil) {
+                kotlinx.coroutines.delay(250)
+            }
+            if (!vm.hasActiveDevice()) {
+                showDiscoverySheet = true
+                discoveryOpenedAtStartup = true
+            }
+        }
+    }
+    val anyDeviceConnected = vm.devices.values.any { it.state is ConnectionState.Connected }
+    LaunchedEffect(anyDeviceConnected) {
+        if (anyDeviceConnected && discoveryOpenedAtStartup) {
+            showDiscoverySheet = false
+            discoveryOpenedAtStartup = false
+        }
+    }
 
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
@@ -260,7 +314,10 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
     }
 
     if (showDiscoverySheet) {
-        DiscoverySheet(vm, onDismiss = { showDiscoverySheet = false })
+        DiscoverySheet(vm, onDismiss = {
+            showDiscoverySheet = false
+            discoveryOpenedAtStartup = false
+        })
     }
 
     if (showQrPairing) {
@@ -272,29 +329,6 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
                 vm.connectTls(host, port)
             }
         )
-    }
-
-    if (!showDiscoverySheet && !showQrPairing) {
-        vm.localAdbPromptTarget?.let { target ->
-            AlertDialog(
-                onDismissRequest = { vm.dismissLocalAdbPrompt(false) },
-                icon = { Icon(Icons.Filled.Devices, contentDescription = null) },
-                title = { Text(stringResource(R.string.local_adb_detected_title)) },
-                text = {
-                    Text(stringResource(R.string.local_adb_detected_msg, target.port))
-                },
-                confirmButton = {
-                    Button(onClick = { vm.connectLocalAdb() }) {
-                        Text(stringResource(R.string.btn_connect))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { vm.dismissLocalAdbPrompt(true) }) {
-                        Text(stringResource(R.string.btn_dismiss))
-                    }
-                }
-            )
-        }
     }
 }
 

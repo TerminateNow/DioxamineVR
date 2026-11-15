@@ -1,5 +1,8 @@
 package io.github.rhythmcache.dioxamine.scrcpy
 
+import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.dpadScrollArea
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -25,10 +28,8 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -226,10 +227,12 @@ fun ScrcpyLogViewer(
                 )
             }
         } else {
+            // D-pad: focus the log, press Select to scroll it with Up/Down; Select or Back to stop.
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
+                    .dpadScrollArea(listState)
                     .background(Color.Black)
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {

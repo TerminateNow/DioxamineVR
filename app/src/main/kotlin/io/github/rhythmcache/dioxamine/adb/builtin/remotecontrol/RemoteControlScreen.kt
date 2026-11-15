@@ -1,5 +1,9 @@
 package io.github.rhythmcache.dioxamine.adb.builtin.remotecontrol
 
+import io.github.rhythmcache.dioxamine.ui.tv.DropdownMenuItem
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedButton
+import io.github.rhythmcache.dioxamine.ui.tv.OutlinedTextField
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -23,6 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -35,7 +42,7 @@ import io.github.rhythmcache.dioxamine.core.executeShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun RemoteControlScreen(
     vm: AdbViewModel,
@@ -45,6 +52,21 @@ fun RemoteControlScreen(
     val client = vm.activeClient()
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+
+    // When the text input (last item) is being edited and the keyboard is up, scroll it to the
+    // top of the screen so the on-screen keyboard can't cover it. A spacer the height of the
+    // screen is added while it has focus so there is always room to scroll that far.
+    var inputBarY by remember { mutableIntStateOf(0) }
+    var inputHasFocus by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    val liftInput = inputHasFocus && imeVisible
+    LaunchedEffect(liftInput) {
+        if (liftInput) {
+            kotlinx.coroutines.delay(60) // let the spacer be laid out first
+            scrollState.animateScrollTo(inputBarY)
+        }
+    }
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
     var isTvDetected by remember { mutableStateOf(false) }
     var isDetecting by remember { mutableStateOf(true) }
@@ -405,6 +427,9 @@ fun RemoteControlScreen(
 
             // Minimalist Input Injection Bar
             RemoteInputBar(
+                modifier = Modifier
+                    .onGloballyPositioned { inputBarY = it.positionInParent().y.toInt() }
+                    .onFocusChanged { inputHasFocus = it.hasFocus },
                 value = textInput,
                 onValueChange = { textInput = it },
                 onSendText = {
@@ -451,6 +476,10 @@ fun RemoteControlScreen(
                         }
                     }
                 }
+            }
+
+            if (inputHasFocus) {
+                Spacer(Modifier.height(screenHeight))
             }
         }
     }

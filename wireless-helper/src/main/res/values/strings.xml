@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dioxamine Wireless Helper</string>
+    <string name="title">Wireless Debugging Helper</string>
+    <string name="status_supported">Android 11 or newer</string>
+    <string name="status_permission">WRITE_SECURE_SETTINGS granted</string>
+    <string name="status_enabled">Wireless debugging is on</string>
+    <string name="enable_on_boot_title">Enable on boot</string>
+    <string name="enable_on_boot_subtitle">Turn on Wireless debugging automatically after this device starts</string>
+    <string name="wireless_now_title">Wireless debugging</string>
+    <string name="wireless_now_subtitle">Turn Wireless debugging on or off right now. Turning it off disconnects any wireless ADB connection to this device.</string>
+    <string name="refresh">Refresh</string>
+    <string name="watchdog_reenable_title">Turn Wireless debugging back on automatically</string>
+    <string name="watchdog_reenable_subtitle">Android switches Wireless debugging off when Wi-Fi drops, e.g. when the screen turns off. This turns it back on as soon as Wi-Fi returns or the screen wakes. Low battery use.</string>
+    <string name="watchdog_wifi_title">Keep Wi-Fi awake when the screen is off</string>
+    <string name="watchdog_wifi_subtitle">Holds Wi-Fi on while the headset sleeps so Wireless debugging and the ADB connection stay up. Uses more battery.</string>
+    <string name="watchdog_channel">Wireless debugging watchdog</string>
+    <string name="watchdog_notification_title">Dioxamine Wireless Helper</string>
+    <string name="watchdog_notification_reenable">Turning Wireless debugging back on when it switches off</string>
+    <string name="watchdog_notification_wifi">Keeping Wi-Fi awake for Wireless debugging</string>
+    <string name="watchdog_notification_both">Keeping Wi-Fi awake and Wireless debugging on</string>
+    <string name="quest_settings_title">Meta Quest Settings</string>
+    <string name="back">Back</string>
+    <string name="quest_not_quest">This device does not look like a Meta Quest. These settings only work on Quest headsets.</string>
+    <string name="guardian_note">Guardian boundary: set it in Meta Quest Settings in Dioxamine. Android only allows it over ADB, and Dioxamine applies your choice again every time it connects to this headset (e.g. after a reboot).</string>
+    <string name="prox_title">Proximity (light) sensor</string>
+    <string name="prox_subtitle">Off keeps the display on when the headset is taken off, and stays off after reboots. If nothing changes, use Meta Quest Settings in Dioxamine (it sends the same command over ADB).</string>
+    <string name="prox_on_toast">Proximity sensor turned on</string>
+    <string name="prox_off_toast">Proximity sensor turned off</string>
+    <string name="enabled_toast">Wireless debugging enabled</string>
+    <string name="disabled_toast">Wireless debugging disabled</string>
+    <string name="grant_title">Grant the permission once</string>
+    <string name="grant_desc">Easiest: in Dioxamine on your phone or TV, connect to this device and use ADB tools → Install Wireless Debugging Helper (installs, grants and opens this app in one tap). Or run this from a PC, then tap Refresh:</string>
+    <string name="launch_once_note">Android only delivers the boot event to apps that have been opened at least once since install. Wireless debugging also needs a Wi-Fi connection.</string>
+</resources>

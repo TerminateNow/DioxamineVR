@@ -17,6 +17,8 @@ class ScrcpyViewModel : ViewModel() {
     var showFloatingNav: Boolean by mutableStateOf(false)
     var showTouchpadOverlay: Boolean by mutableStateOf(false)
     var showKeyboard: Boolean by mutableStateOf(false)
+    /** Set when "Auto-start mirroring" wants the scrcpy screen to start mirroring by itself. */
+    var autoStartRequested: Boolean by mutableStateOf(false)
 
     @Volatile private var previousTeardownJob: Job? = null
 

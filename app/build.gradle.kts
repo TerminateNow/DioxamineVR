@@ -140,9 +140,12 @@ dependencies {
     implementation(project(":fastboot-kt"))
     implementation(project(":terminal-view"))
     implementation(project(":app-logger"))
+    implementation(project(":wireless-debug"))
     implementation(libs.qrose)
 
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests (Android's stub throws "not mocked")
+    testImplementation("org.json:json:20240303")
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
@@ -734,4 +737,48 @@ tasks.named("preBuild") {
         buildDioxAgentJar,
         buildDxlsNative,
     )
+}
+
+// -----------------------------------------------------------------------------
+// Bundle the headset helper app (:wireless-helper) as assets/wireless-helper.apk
+// so Dioxamine can install it onto a connected device in one tap. The helper is
+// built with the same build type as this variant (debug -> debug, release -> release).
+// -----------------------------------------------------------------------------
+
+abstract class BundleWirelessHelperApk : DefaultTask() {
+    @get:InputDirectory
+    abstract val apkDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun bundle() {
+        val apk =
+            apkDir.get().asFile
+                .listFiles { f -> f.isFile && f.extension == "apk" }
+                ?.maxByOrNull { it.lastModified() }
+                ?: error("No helper APK found in ${apkDir.get().asFile}")
+
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        apk.copyTo(out.resolve("wireless-helper.apk"), overwrite = true)
+        logger.lifecycle("wireless-helper.apk <- ${apk.name}")
+    }
+}
+
+androidComponents.onVariants { variant ->
+    val buildType = variant.buildType ?: return@onVariants
+    val buildTypeCap = buildType.replaceFirstChar { it.uppercase() }
+    val variantCap = variant.name.replaceFirstChar { it.uppercase() }
+
+    val bundleTask =
+        tasks.register<BundleWirelessHelperApk>("bundleWirelessHelper$variantCap") {
+            dependsOn(":wireless-helper:assemble$buildTypeCap")
+            apkDir.set(rootProject.layout.projectDirectory.dir("wireless-helper/build/outputs/apk/$buildType"))
+            outputDir.set(layout.buildDirectory.dir("generated/wirelessHelper/${variant.name}"))
+        }
+
+    variant.sources.assets?.addGeneratedSourceDirectory(bundleTask, BundleWirelessHelperApk::outputDir)
 }

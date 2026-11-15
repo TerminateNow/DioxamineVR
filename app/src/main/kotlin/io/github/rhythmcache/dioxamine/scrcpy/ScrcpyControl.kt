@@ -104,6 +104,7 @@ class ScrcpyControl(
                 wireMutex.withLock {
                     if (!stream.isClosed) {
                         stream.write(packet)
+                        ScrcpyStreamStats.controlTxBytes.addAndGet(packet.size.toLong())
                     }
                 }
             }
@@ -118,6 +119,7 @@ class ScrcpyControl(
             runCatching {
                 if (!stream.isClosed) {
                     stream.write(packet)
+                    ScrcpyStreamStats.controlTxBytes.addAndGet(packet.size.toLong())
                     true
                 } else {
                     false

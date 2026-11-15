@@ -21,9 +21,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbDetector
-import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbTarget
+import io.github.rhythmcache.dioxamine.adb.discovery.AdbServiceType
+import io.github.rhythmcache.dioxamine.adb.discovery.WirelessAutoConnector
 import io.github.rhythmcache.dioxamine.scrcpy.ScrcpyDiscoveryCache
+import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
 import java.io.File
+
+const val PREF_AUTOCONNECT_WIRELESS = "adb_autoconnect_wireless"
+private const val WIRELESS_AUTOCONNECT_WINDOW_MS = 60_000L
+private const val FAVORITE_SCAN_INTERVAL_MS = 3_000L
 
 class AdbViewModel(
     private val keyDir: File,
@@ -63,10 +69,6 @@ class AdbViewModel(
     var daemonDialogMessage by mutableStateOf<String?>(null)
         private set
 
-    var localAdbPromptTarget by mutableStateOf<LocalAdbTarget?>(null)
-        private set
-    private var dismissedLocalPort: Int? = null
-    private var dismissedUntilMs: Long = 0L
 
     var flashState by mutableStateOf<FlashUiState>(FlashUiState.Idle)
         private set
@@ -108,65 +110,255 @@ class AdbViewModel(
             }
         }
 
-        // Periodic local ADB detection (checks every 10s)
+        // Periodic local ADB detection (checks every 10s).
+        // The "Local ADB Detected" prompt has been removed: when local wireless ADB is found we
+        // only act if the user enabled "Auto-connect to Localhost"; otherwise we stay silent.
+        // Localhost is still listed in the Discover Devices sheet for manual connection.
         viewModelScope.launch(Dispatchers.IO) {
             kotlinx.coroutines.delay(1000)
             while (isActive) {
-                val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
-                val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
-
-                if (!detectEnabled) {
-                    if (localAdbPromptTarget != null) {
-                        withContext(Dispatchers.Main) {
-                            localAdbPromptTarget = null
-                        }
-                    }
-                } else if (!isLocalhostConnected() && localAdbPromptTarget == null) {
-                    val target = LocalAdbDetector.detect()
-                    if (target != null) {
-                        if (autoConnect) {
-                            withContext(Dispatchers.Main) {
-                                localAdbPromptTarget = null
-                            }
-                            connectTcpDirect("127.0.0.1", target.port)
-                        } else {
-                            val now = System.currentTimeMillis()
-                            val isDismissed = (target.port == dismissedLocalPort && now < dismissedUntilMs)
-                            if (!isDismissed && !isLocalhostConnected()) {
-                                withContext(Dispatchers.Main) {
-                                    localAdbPromptTarget = target
-                                }
-                            }
-                        }
-                    } else {
-                        // Port is closed / adb was toggled off -> reset dismissal for fresh future session
-                        dismissedLocalPort = null
-                        dismissedUntilMs = 0L
-                    }
-                }
+                autoConnectLocalAdbIfEnabled()
                 kotlinx.coroutines.delay(10000)
             }
         }
     }
 
-    fun triggerLocalAdbCheck() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
-            val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
-            if (detectEnabled && !isLocalhostConnected()) {
-                val target = LocalAdbDetector.detect() ?: return@launch
-                if (autoConnect) {
-                    withContext(Dispatchers.Main) {
-                        localAdbPromptTarget = null
-                    }
-                    connectTcpDirect("127.0.0.1", target.port)
-                } else if (localAdbPromptTarget == null) {
-                    withContext(Dispatchers.Main) {
-                        localAdbPromptTarget = target
-                    }
-                }
+    // -- Favorite host and auto-connect -------------------------------------------------------
+    //
+    // Wireless debugging picks a new port every time it is turned on (e.g. after the headset
+    // reboots), so a saved "host:port" goes stale. On app start / return to foreground / a dropped
+    // TLS connection we watch mDNS for ADB connect services and connect to the advertised port:
+    //  - if the user starred a favorite IP in Discover Devices, only that IP is used;
+    //  - otherwise (and if enabled in Settings) any device whose serial we connected to over TLS
+    //    before, matched via the `adb-<serial>-*` service name.
+    // Only one ADB connection is kept at a time (see [disconnectOthers]), so auto-connect never
+    // runs while a device is already connected or connecting.
+
+    /** The starred IP that is auto-connected on app start (port found via mDNS), or null. */
+    var favoriteHost by mutableStateOf(context?.let { FavoriteAdbHost.get(it) })
+        private set
+
+    /** Makes [host] the single favorite, or clears the favorite when it already is (or [host] is null). */
+    fun toggleFavoriteHost(host: String?) {
+        val ctx = context ?: return
+        val newValue = if (host == null || host == favoriteHost) null else host
+        FavoriteAdbHost.set(ctx, newValue)
+        favoriteHost = newValue
+        if (newValue != null) ensureFavoriteWatch()
+    }
+
+    /** True while the mDNS watch for the favorite / known wireless devices is running. */
+    var wirelessAutoConnecting by mutableStateOf(false)
+        private set
+
+    private val wirelessAutoConnector by lazy { context?.let { WirelessAutoConnector(it) } }
+    private var wirelessAutoConnectJob: Job? = null
+    private val wirelessAutoConnectAttempted = mutableSetOf<String>()
+
+    private fun isConnectedOrConnecting(conn: DeviceConnection) =
+        conn.state is ConnectionState.Connected || conn.state is ConnectionState.Connecting
+
+    private fun anyDeviceBusy() = devices.values.any { isConnectedOrConnecting(it) }
+
+    /** Safe to call repeatedly; does nothing if a device is already connected, or nothing to look for. */
+    fun startWirelessAutoConnect() {
+        val ctx = context ?: return
+        if (wirelessAutoConnectJob?.isActive == true) return
+        if (anyDeviceBusy()) return
+
+        // With a favorite, the 3-second favorite scan loop does the work.
+        if (favoriteHost != null) {
+            ensureFavoriteWatch()
+            return
+        }
+
+        if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
+        val known: Set<String> = KnownWirelessDevices.getAll(ctx).toSet().ifEmpty { return }
+        val connector = wirelessAutoConnector ?: return
+
+        wirelessAutoConnectAttempted.clear()
+        wirelessAutoConnecting = true
+        AppLogger.i("ADB_VM", "Auto-connect: looking for known devices $known")
+        connector.start { service ->
+            viewModelScope.launch(Dispatchers.Main) {
+                onAutoConnectServiceFound(null, known, service)
             }
         }
+        wirelessAutoConnectJob = viewModelScope.launch(Dispatchers.Main) {
+            try {
+                // Keep watching for a while: after a reboot the device may take some time to get
+                // Wi-Fi and turn Wireless debugging back on.
+                val deadline = System.currentTimeMillis() + WIRELESS_AUTOCONNECT_WINDOW_MS
+                while (isActive && System.currentTimeMillis() < deadline) {
+                    if (devices.values.any { it.state is ConnectionState.Connected }) break
+                    kotlinx.coroutines.delay(1000)
+                }
+            } finally {
+                connector.stop()
+                wirelessAutoConnecting = false
+            }
+        }
+    }
+
+    // -- Favorite scan loop ------------------------------------------------------------------
+    // While a favorite is starred, the app is in the foreground and no device is connected or
+    // connecting (none yet, or the current one dropped), scan for the favorite IP every
+    // FAVORITE_SCAN_INTERVAL_MS and connect to it as soon as it shows up.
+
+    private var appInForeground = true
+    private var favoriteWatchJob: Job? = null
+    private val favoriteConnector by lazy { context?.let { WirelessAutoConnector(it) } }
+
+    fun onAppForeground() {
+        appInForeground = true
+        startWirelessAutoConnect()
+    }
+
+    fun onAppBackground() {
+        appInForeground = false
+    }
+
+    private fun ensureFavoriteWatch() {
+        if (favoriteWatchJob?.isActive == true || favoriteHost == null) return
+        favoriteWatchJob = viewModelScope.launch(Dispatchers.Main) {
+            try {
+                while (isActive) {
+                    val fav = favoriteHost ?: break
+                    if (appInForeground && !anyDeviceBusy()) {
+                        wirelessAutoConnecting = true
+                        scanForFavorite(fav)
+                    } else {
+                        favoriteConnector?.stop()
+                        wirelessAutoConnecting = false
+                    }
+                    kotlinx.coroutines.delay(FAVORITE_SCAN_INTERVAL_MS)
+                }
+            } finally {
+                favoriteConnector?.stop()
+                wirelessAutoConnecting = false
+            }
+        }
+    }
+
+    private fun scanForFavorite(fav: String) {
+        if (FavoriteAdbHost.isLocalhost(fav)) {
+            // This device's own adbd isn't advertised over mDNS; probe its local port instead.
+            viewModelScope.launch(Dispatchers.IO) {
+                val target = LocalAdbDetector.detect() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!anyDeviceBusy() && favoriteHost == fav) connectTcpDirect("127.0.0.1", target.port)
+                }
+            }
+            return
+        }
+        val connector = favoriteConnector ?: return
+        // A fresh mDNS discovery each round: a service is only reported once per discovery
+        // session, so restarting lets a device that appeared (or failed to connect) be seen again.
+        connector.stop()
+        wirelessAutoConnectAttempted.clear()
+        connector.start { service ->
+            viewModelScope.launch(Dispatchers.Main) {
+                onAutoConnectServiceFound(fav, emptySet(), service)
+            }
+        }
+    }
+
+    private fun onAutoConnectServiceFound(
+        favorite: String?,
+        known: Set<String>,
+        service: WirelessAutoConnector.FoundService
+    ) {
+        if (anyDeviceBusy()) return
+        val host: String
+        if (favorite != null) {
+            if (favorite != favoriteHost || favorite !in service.hosts) return
+            host = favorite
+        } else {
+            if (service.type != AdbServiceType.TLS_CONNECT || service.deviceId !in known) return
+            host = service.hosts.first()
+        }
+        if (!wirelessAutoConnectAttempted.add("${service.type}|$host:${service.port}")) return
+
+        AppLogger.i("ADB_VM", "Auto-connect: ${service.deviceId} found at $host:${service.port} (${service.type})")
+        when (service.type) {
+            AdbServiceType.TLS_CONNECT -> connectTls(host, service.port)
+            AdbServiceType.TCP -> connectTcpDirect(host, service.port)
+            AdbServiceType.TLS_PAIRING -> Unit
+        }
+    }
+
+    /**
+     * Re-applies the Meta Quest choices saved for this headset (guardian, proximity sensor) right
+     * after connecting, because the headset resets both on reboot. Does nothing for non-Quest
+     * devices or headsets with nothing saved.
+     */
+    private fun reapplyQuestSettings(id: String) {
+        val ctx = context ?: return
+        val conn = devices[id] ?: return
+        val client = conn.client ?: return
+        val key = conn.uniqueId ?: conn.id
+        val guardian = io.github.rhythmcache.dioxamine.adb.builtin.metaquest.QuestSettingsStore.guardianOn(ctx, key)
+        val sensor = io.github.rhythmcache.dioxamine.adb.builtin.metaquest.QuestSettingsStore.sensorOn(ctx, key)
+        if (guardian == null && sensor == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val manufacturer = client.shell("getprop ro.product.manufacturer").stdoutText
+                if (!io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor.isQuestManufacturer(manufacturer)) return@launch
+                guardian?.let {
+                    val r = client.shell(io.github.rhythmcache.dioxamine.wirelessdebug.QuestGuardian.adbSetCommand(it))
+                    AppLogger.i("ADB_VM", "Re-applied Quest guardian ${if (it) "on" else "off"} (exit ${r.exitCode})")
+                }
+                sensor?.let {
+                    val r = client.shell(io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor.adbCommand(it))
+                    AppLogger.i("ADB_VM", "Re-applied Quest proximity sensor ${if (it) "on" else "off"} (exit ${r.exitCode})")
+                }
+            } catch (e: Exception) {
+                AppLogger.w("ADB_VM", "Re-applying Quest settings failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Only one ADB connection is kept at a time: once [keepId] has connected, every other device
+     * (connected, connecting or failed) is disconnected and removed.
+     */
+    private fun disconnectOthers(keepId: String) {
+        devices.keys.filter { it != keepId }.forEach { disconnect(it) }
+    }
+
+    private fun rememberWirelessDevice(serial: String?) {
+        val ctx = context ?: return
+        if (!serial.isNullOrBlank()) KnownWirelessDevices.add(ctx, serial)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        wirelessAutoConnector?.stop()
+        favoriteConnector?.stop()
+    }
+
+    fun triggerLocalAdbCheck() {
+        viewModelScope.launch(Dispatchers.IO) {
+            autoConnectLocalAdbIfEnabled()
+        }
+    }
+
+    private fun autoConnectLocalAdbIfEnabled() {
+        val detectEnabled = prefs?.getBoolean("adb_detect_localhost", true) ?: true
+        val autoConnect = prefs?.getBoolean("adb_autoconnect_localhost", false) ?: false
+        if (!detectEnabled || !autoConnect || isLocalhostConnected()) return
+        // Only one ADB connection at a time: don't replace a device the user is already using.
+        if (anyDeviceBusy()) return
+        val target = LocalAdbDetector.detect() ?: return
+        connectTcpDirect("127.0.0.1", target.port)
+    }
+
+    /** Set once the startup "Discover Devices" sheet has been considered, so it only auto-opens once per app session. */
+    var startupDiscoveryHandled = false
+
+    /** True when at least one device is connected or in the middle of connecting. */
+    fun hasActiveDevice(): Boolean = devices.values.any {
+        it.state is ConnectionState.Connected || it.state is ConnectionState.Connecting
     }
 
     fun isLocalhostConnected(): Boolean {
@@ -180,22 +372,6 @@ class AdbViewModel(
             val activeState = conn.state is ConnectionState.Connected || conn.state is ConnectionState.Connecting
             isLocal && activeState
         }
-    }
-
-    fun dismissLocalAdbPrompt(rememberDismissal: Boolean = false) {
-        val target = localAdbPromptTarget
-        if (target != null) {
-            dismissedLocalPort = target.port
-            // Temporary dismiss = 2 min cooldown, Remember dismissal = 1 hour
-            dismissedUntilMs = System.currentTimeMillis() + if (rememberDismissal) 3600_000L else 120_000L
-        }
-        localAdbPromptTarget = null
-    }
-
-    fun connectLocalAdb() {
-        val target = localAdbPromptTarget ?: return
-        localAdbPromptTarget = null
-        connectTcpDirect("127.0.0.1", target.port)
     }
 
     private fun handleDeadConnection(id: String, conn: DeviceConnection) {
@@ -232,8 +408,15 @@ class AdbViewModel(
                         isRoot = details.isRoot
                     )
                     AppLogger.i("ADB_VM", "AdbViewModel: Auto-reconnected $id successfully")
+                    withContext(Dispatchers.Main) { reapplyQuestSettings(id) }
+                    if (isTls) rememberWirelessDevice(details.uniqueId)
                 } catch (e: Exception) {
                     devices[id] = conn.copy(client = null, state = ConnectionState.Error("Connection lost: ${e.message}"))
+                    // Wireless debugging likely came back on a new port (e.g. the device rebooted):
+                    // look for it again over mDNS.
+                    if (isTls) {
+                        withContext(Dispatchers.Main) { startWirelessAutoConnect() }
+                    }
                 }
             }
         }
@@ -280,7 +463,9 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -322,7 +507,9 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -377,7 +564,9 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: serial
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, defaultLabel, DeviceTransport.USB, null, ConnectionState.Error(e.message ?: "USB connection failed"))
             }
@@ -413,7 +602,10 @@ class AdbViewModel(
                     isRoot = details.isRoot,
                     uniqueId = details.uniqueId ?: id
                 )
-                if (activeDeviceId == null) activeDeviceId = id
+                activeDeviceId = id
+                disconnectOthers(id)
+                reapplyQuestSettings(id)
+                rememberWirelessDevice(details.uniqueId)
                 onResult?.invoke(true, null)
             } catch (e: io.github.rhythmcache.adb.AdbException.NotPaired) {
                 devices.remove(id)
@@ -451,11 +643,13 @@ class AdbViewModel(
 
     fun disconnect(id: String) {
         val conn = devices[id] ?: return
+        // Remove first so the health monitor can't mistake the closing client for a dropped
+        // connection and auto-reconnect it.
+        devices.remove(id)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try { conn.client?.close() } catch (_: Exception) {}
             }
-            devices.remove(id)
             ScrcpyDiscoveryCache.clear(id)
             nativeOutputs.clear()
             runningCommands.clear()
@@ -633,6 +827,209 @@ class AdbViewModel(
                     daemonDialogMessage = "Failed: ${e.message}"
                 }
             }
+        }
+    }
+
+    /**
+     * Grants this app WRITE_SECURE_SETTINGS by running `pm grant` over an ADB connection to the
+     * device the app itself is running on (needed to toggle wireless debugging at boot).
+     * [onResult] is invoked on the main thread with a user-facing message.
+     */
+    fun grantWriteSecureSettings(context: Context, onResult: (success: Boolean, message: String) -> Unit) {
+        val client = activeClient()
+        if (client == null) {
+            onResult(false, "No connected ADB device. Connect to this device's own ADB first.")
+            return
+        }
+        val pkg = context.packageName
+        viewModelScope.launch(Dispatchers.IO) {
+            val (ok, msg) = try {
+                val res = client.shell("pm grant $pkg android.permission.WRITE_SECURE_SETTINGS")
+                if (res.isSuccess) {
+                    true to "Permission granted"
+                } else {
+                    false to (res.stderr.toString(Charsets.UTF_8).ifBlank { res.stdoutText }.trim()
+                        .ifBlank { "pm grant failed (exit ${res.exitCode})" })
+                }
+            } catch (e: Exception) {
+                false to "Failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) { onResult(ok, msg) }
+        }
+    }
+
+    var helperInstallState by mutableStateOf<HelperInstallState>(HelperInstallState.Idle)
+        private set
+
+    private var helperInstallJob: Job? = null
+
+    var helperStatus by mutableStateOf<HelperAppStatus>(HelperAppStatus.Unknown)
+        private set
+    private var bundledHelperVersion: Long? = null
+    private var helperStatusJob: Job? = null
+
+    /** versionCode of the helper APK bundled in assets (read once), or null if not bundled. */
+    private fun readBundledHelperVersion(appContext: Context): Long? {
+        bundledHelperVersion?.let { return it }
+        val probe = File(appContext.cacheDir, "helper-version-probe.apk")
+        return try {
+            appContext.assets.open(WirelessDebugging.HELPER_ASSET).use { input ->
+                probe.outputStream().use { input.copyTo(it) }
+            }
+            @Suppress("DEPRECATION")
+            val info = appContext.packageManager.getPackageArchiveInfo(probe.absolutePath, 0) ?: return null
+            val version = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            bundledHelperVersion = version
+            version
+        } catch (e: java.io.FileNotFoundException) {
+            null
+        } finally {
+            probe.delete()
+        }
+    }
+
+    /** Checks whether the helper is installed on the active device and whether it's outdated. */
+    fun refreshHelperStatus(context: Context) {
+        val client = activeClient()
+        if (client == null) {
+            helperStatus = HelperAppStatus.Unknown
+            return
+        }
+        val apiLevel = activeDeviceId?.let { devices[it]?.apiLevel }
+        if (apiLevel != null && apiLevel < 30) {
+            helperStatus = HelperAppStatus.Unsupported
+            return
+        }
+        val appContext = context.applicationContext
+        helperStatusJob?.cancel()
+        helperStatus = HelperAppStatus.Checking
+        helperStatusJob = viewModelScope.launch(Dispatchers.IO) {
+            val status = try {
+                val bundled = readBundledHelperVersion(appContext)
+                if (bundled == null) {
+                    HelperAppStatus.NotBundled
+                } else {
+                    val out = client.shell(
+                        "dumpsys package ${WirelessDebugging.HELPER_PACKAGE} | grep -m1 versionCode="
+                    ).stdoutText
+                    val installed = Regex("versionCode=(\\d+)").find(out)?.groupValues?.get(1)?.toLongOrNull()
+                    when {
+                        installed == null -> HelperAppStatus.NotInstalled(bundled)
+                        installed < bundled -> HelperAppStatus.UpdateAvailable(installed, bundled)
+                        else -> HelperAppStatus.UpToDate(installed)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.w("ADB_VM", "Helper status check failed: ${e.message}")
+                HelperAppStatus.Unknown
+            }
+            withContext(Dispatchers.Main) { helperStatus = status }
+        }
+    }
+
+    /**
+     * One-tap setup of the headset helper on the active device: installs the helper APK bundled in
+     * this app's assets, grants it WRITE_SECURE_SETTINGS, and launches it once (Android only delivers
+     * BOOT_COMPLETED to apps that have been opened since install). Progress goes to [helperInstallState].
+     */
+    fun installWirelessHelper(context: Context) {
+        if (helperInstallState is HelperInstallState.Running) return
+        val client = activeClient()
+        if (client == null) {
+            helperInstallState = HelperInstallState.Error("No connected ADB device.")
+            return
+        }
+        val apiLevel = activeDeviceId?.let { devices[it]?.apiLevel }
+        if (apiLevel != null && apiLevel < 30) {
+            helperInstallState = HelperInstallState.Error(
+                "Wireless debugging needs Android 11 or newer on the connected device (it reports API $apiLevel)."
+            )
+            return
+        }
+        val appContext = context.applicationContext
+        helperInstallJob = viewModelScope.launch(Dispatchers.IO) {
+            val apk = File(appContext.cacheDir, WirelessDebugging.HELPER_ASSET)
+            try {
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.INSTALLING, 0f)
+                }
+                val alreadyCurrent = helperStatus is HelperAppStatus.UpToDate
+                if (!alreadyCurrent) {
+                appContext.assets.open(WirelessDebugging.HELPER_ASSET).use { input ->
+                    apk.outputStream().use { input.copyTo(it) }
+                }
+                suspend fun installApk() {
+                    // -r: replace an existing install, -d: allow a lower versionCode.
+                    client.install.install(apk, flags = listOf("-r", "-d")).collect { progress ->
+                        withContext(Dispatchers.Main) {
+                            helperInstallState = HelperInstallState.Running(
+                                HelperInstallStep.INSTALLING,
+                                progress.percentage / 100f
+                            )
+                        }
+                    }
+                }
+                try {
+                    installApk()
+                } catch (e: AdbException) {
+                    // A helper signed with a different key (e.g. from a CI artifact) can't be
+                    // updated in place; it only holds one preference, so replace it.
+                    if (e.message?.contains("UPDATE_INCOMPATIBLE") != true) throw e
+                    AppLogger.i("ADB_VM", "Helper signature mismatch; uninstalling old helper and retrying")
+                    client.shell("pm uninstall ${WirelessDebugging.HELPER_PACKAGE}")
+                    installApk()
+                }
+                } // !alreadyCurrent: an up-to-date helper only needs the grant + launch below
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.GRANTING, 1f)
+                }
+                val grant = client.shell(
+                    "pm grant ${WirelessDebugging.HELPER_PACKAGE} android.permission.WRITE_SECURE_SETTINGS"
+                )
+                if (!grant.isSuccess) {
+                    val msg = grant.stderr.toString(Charsets.UTF_8).ifBlank { grant.stdoutText }.trim()
+                    throw IllegalStateException("Installed, but granting the permission failed: $msg")
+                }
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Running(HelperInstallStep.LAUNCHING, 1f)
+                }
+                val launch = client.shell(
+                    "am start -n ${WirelessDebugging.HELPER_PACKAGE}/${WirelessDebugging.HELPER_ACTIVITY}"
+                )
+                val launchOut = (launch.stdoutText + launch.stderr.toString(Charsets.UTF_8)).trim()
+                val launched = launch.isSuccess && !launchOut.contains("Error", ignoreCase = true)
+                if (!launched) {
+                    AppLogger.w("ADB_VM", "Helper launch output: $launchOut")
+                }
+
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Success(launched)
+                    refreshHelperStatus(appContext)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.io.FileNotFoundException) {
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Error("This build does not include the helper APK.")
+                }
+            } catch (e: Exception) {
+                AppLogger.e("ADB_VM", "Helper install failed", e)
+                withContext(Dispatchers.Main) {
+                    helperInstallState = HelperInstallState.Error(e.message ?: e.toString())
+                }
+            } finally {
+                apk.delete()
+            }
+        }
+    }
+
+    fun dismissHelperInstall() {
+        if (helperInstallState !is HelperInstallState.Running) {
+            helperInstallState = HelperInstallState.Idle
         }
     }
 

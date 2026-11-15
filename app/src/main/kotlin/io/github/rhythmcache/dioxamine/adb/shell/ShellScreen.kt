@@ -1,5 +1,17 @@
 package io.github.rhythmcache.dioxamine.adb.shell
 
+import io.github.rhythmcache.dioxamine.ui.tv.DropdownMenuItem
+import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.isSelectKey
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -44,6 +56,7 @@ private val TerminalBackground = Color(0xFF0D1117)
  * Keyboard input is complemented by a 2x7 Termux-style extra keys panel sitting right
  * above the soft keyboard (via imePadding).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ShellScreen(adbViewModel: AdbViewModel) {
     val context = LocalContext.current
@@ -64,6 +77,33 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
     var altState by remember { mutableStateOf(ModifierState.OFF) }
     var terminalViewRef by remember { mutableStateOf<BoundedTerminalView?>(null) }
 
+    // D-pad / remote: the terminal is a single focus stop. It only takes keys (and shows the
+    // keyboard) after Select or a tap — "typing mode" — and keeps them until Back, so the remote
+    // can't get stuck inside it while moving around the screen.
+    var typingMode by remember { mutableStateOf(false) }
+    val terminalStopFocus = remember { FocusRequester() }
+    val imm = remember { context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager }
+
+    fun enterTypingMode() {
+        val tv = terminalViewRef ?: return
+        typingMode = true
+        tv.isFocusable = true
+        tv.isFocusableInTouchMode = true
+        tv.requestFocus()
+        tv.post { imm?.showSoftInput(tv, 0) }
+    }
+
+    fun exitTypingMode() {
+        val tv = terminalViewRef
+        typingMode = false
+        if (tv != null) {
+            imm?.hideSoftInputFromWindow(tv.windowToken, 0)
+            tv.isFocusable = false
+            tv.isFocusableInTouchMode = false
+        }
+        runCatching { terminalStopFocus.requestFocus() }
+    }
+
     val typeface = remember {
         try {
             Typeface.createFromAsset(context.assets, "fonts/JetBrainsMono-Regular.ttf")
@@ -77,12 +117,8 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
             override fun onScale(scale: Float): Float = 1.0f
 
             override fun onSingleTapUp(e: MotionEvent) {
-                // Tapping terminal area requests focus and shows soft keyboard for direct typing
-                terminalViewRef?.let { tv ->
-                    tv.requestFocus()
-                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    imm?.showSoftInput(tv, 0)
-                }
+                // Tapping the terminal enters typing mode: focus + soft keyboard
+                enterTypingMode()
             }
 
             override fun shouldBackButtonBeMappedToEscape(): Boolean = false
@@ -257,60 +293,48 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
         }
     }
 
+    // Back leaves typing mode (instead of the app-level "focus the side rail" back).
+    BackHandler(enabled = typingMode) { exitTypingMode() }
+
+    // The first Back usually just closes the on-screen keyboard (handled by the IME itself);
+    // treat the keyboard closing as leaving typing mode too, so one Back is enough.
+    val imeVisible = WindowInsets.isImeVisible
+    var imeShownInTypingMode by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible, typingMode) {
+        if (!typingMode) {
+            imeShownInTypingMode = false
+        } else if (imeVisible) {
+            imeShownInTypingMode = true
+        } else if (imeShownInTypingMode) {
+            imeShownInTypingMode = false
+            exitTypingMode()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .imePadding() // Automatically positions extra keys right above the soft keyboard
     ) {
-        // -- Terminal surface (strictly bounded and clipped) --------
-        Box(
+        // -- Top bar: lives outside the terminal box so the remote can reach the menu
+        // (Up from the terminal) instead of it sitting on top of the terminal's focus area.
+        Row(
             modifier = Modifier
-                .weight(1f)
                 .fillMaxWidth()
-                .clipToBounds()
-                .background(TerminalBackground),
+                .background(Color.Black)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clipToBounds(),
-                factory = { ctx ->
-                    BoundedTerminalView(ctx).apply {
-                        terminalViewRef = this
-                        val fontPx = TypedValue.applyDimension(
-                            TypedValue.COMPLEX_UNIT_SP,
-                            13f,
-                            ctx.resources.displayMetrics,
-                        ).toInt()
-                        setTextSize(fontPx)
-                        setTypeface(typeface)
-                        setTerminalViewClient(viewClient)
-                        terminalSession?.let { session ->
-                            session.updateTerminalSessionClient(sessionClient)
-                            attachSession(session)
-                        }
-                        isFocusable = true
-                        isFocusableInTouchMode = true
-                    }
-                },
-                update = { view ->
-                    terminalViewRef = view
-                    view.setTerminalViewClient(viewClient)
-                    if (terminalSession != null && view.currentSession != terminalSession) {
-                        terminalSession?.updateTerminalSessionClient(sessionClient)
-                        view.attachSession(terminalSession)
-                    }
-                },
+            Text(
+                text = activeConn?.label ?: "",
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f),
             )
-
-            // -- Overflow options menu (Clear screen / Restart shell) --
+            // Overflow options menu (Clear screen / Restart shell)
             var showOverflowMenu by remember { mutableStateOf(false) }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-            ) {
+            Box {
                 IconButton(
                     onClick = { showOverflowMenu = true },
                     modifier = Modifier
@@ -356,6 +380,70 @@ fun ShellScreen(adbViewModel: AdbViewModel) {
                     }
                 }
             }
+        }
+
+        // -- Terminal surface (strictly bounded and clipped) --------
+        var terminalStopFocused by remember { mutableStateOf(false) }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clipToBounds()
+                .background(TerminalBackground)
+                .border(
+                    width = if (typingMode) 3.dp else 2.dp,
+                    color = when {
+                        typingMode -> MaterialTheme.colorScheme.primary
+                        terminalStopFocused -> Color.White.copy(alpha = 0.8f)
+                        else -> Color.Transparent
+                    }
+                )
+                .focusRequester(terminalStopFocus)
+                .onFocusChanged { terminalStopFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (!typingMode && isSelectKey(event.nativeKeyEvent.keyCode)) {
+                        if (event.type == KeyEventType.KeyUp) enterTypingMode()
+                        true
+                    } else false
+                }
+                // Stays focusable: while typing, focus sits in the terminal view inside it, and on
+                // exit it returns here immediately.
+                .focusable(),
+        ) {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
+                factory = { ctx ->
+                    BoundedTerminalView(ctx).apply {
+                        terminalViewRef = this
+                        val fontPx = TypedValue.applyDimension(
+                            TypedValue.COMPLEX_UNIT_SP,
+                            13f,
+                            ctx.resources.displayMetrics,
+                        ).toInt()
+                        setTextSize(fontPx)
+                        setTypeface(typeface)
+                        setTerminalViewClient(viewClient)
+                        terminalSession?.let { session ->
+                            session.updateTerminalSessionClient(sessionClient)
+                            attachSession(session)
+                        }
+                        // Only focusable while in typing mode (see enterTypingMode).
+                        isFocusable = typingMode
+                        isFocusableInTouchMode = typingMode
+                    }
+                },
+                update = { view ->
+                    terminalViewRef = view
+                    view.setTerminalViewClient(viewClient)
+                    if (terminalSession != null && view.currentSession != terminalSession) {
+                        terminalSession?.updateTerminalSessionClient(sessionClient)
+                        view.attachSession(terminalSession)
+                    }
+                },
+            )
+
         }
 
         // -- Error banner ------------------------------------------

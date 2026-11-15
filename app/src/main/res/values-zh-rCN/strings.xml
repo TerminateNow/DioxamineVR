@@ -231,7 +231,7 @@
     <string name="scrcpy_audio_only_banner">音频传输已启用</string>
     <string name="scrcpy_audio_only_desc">纯音频模式（视频流已停用）</string>
     <string name="label_resolution">最大尺寸</string>
-    <string name="label_add_chip">+ 添加</string>
+    <string name="label_add_chip">添加</string>
     <string name="dialog_add_max_size_title">添加自定义最大尺寸</string>
     <string name="dialog_add_max_size_msg">输入最大像素尺寸（例如 1440 或 2160）：</string>
     <string name="dialog_add_fps_title">添加自定义帧率</string>
