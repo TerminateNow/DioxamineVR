@@ -71,6 +71,11 @@ import io.github.rhythmcache.dioxamine.core.DioxForegroundService
 import io.github.rhythmcache.dioxamine.core.DeviceInfoCollector
 import io.github.rhythmcache.dioxamine.core.UpdateChecker
 import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.res.pluralStringResource
 import io.github.rhythmcache.dioxamine.plugin.PermissionPolicy
 import io.github.rhythmcache.dioxamine.plugin.PluginManifest
 import io.github.rhythmcache.dioxamine.plugin.PluginPermission
@@ -302,6 +307,13 @@ fun SettingsScreen(vm: AdbViewModel) {
 
     val isMonetSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
+    // Appearance > Hide/Show Sections opens as its own page in place of the settings list.
+    var showHideShowPage by rememberSaveable { mutableStateOf(false) }
+    if (showHideShowPage) {
+        HideShowSectionsScreen(onBack = { showHideShowPage = false })
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -311,14 +323,56 @@ fun SettingsScreen(vm: AdbViewModel) {
         Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
 
-        // -- Theme Settings Card (Expandable) ------------------------
+        // -- Appearance Card (Expandable): Hide/Show Sections + theme ----
         ExpandableSettingsCard(
-            title = stringResource(R.string.settings_theme_title),
+            title = stringResource(R.string.settings_appearance_title),
             subtitle = stringResource(themeMode.labelRes),
             icon = Icons.Filled.Palette,
             expanded = themeExpanded,
             onToggle = { themeExpanded = !themeExpanded }
         ) {
+                        // Hide/Show Sections: opens the full list of app sections and settings.
+                        val hiddenCount = UiVisibility.hiddenCount()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showHideShowPage = true }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Filled.VisibilityOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stringResource(R.string.vis_hide_show_title), fontWeight = FontWeight.Medium)
+                                Text(
+                                    if (hiddenCount == 0) {
+                                        stringResource(R.string.vis_none_hidden)
+                                    } else {
+                                        pluralStringResource(R.plurals.vis_hidden_count, hiddenCount, hiddenCount)
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            stringResource(R.string.settings_theme_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+
                         // Monet / Dynamic Colors Option
                         // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
                         val switchRowFocus1 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }

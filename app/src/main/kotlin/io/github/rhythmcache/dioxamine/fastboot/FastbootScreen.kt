@@ -34,22 +34,35 @@ import io.github.rhythmcache.dioxamine.adb.isValidIp
 import io.github.rhythmcache.dioxamine.adb.isValidPort
 import io.github.rhythmcache.dioxamine.adb.parseIpAndPort
 import io.github.rhythmcache.dioxamine.core.DeviceTransport
+import io.github.rhythmcache.dioxamine.ui.visibility.AllSectionsHiddenHint
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 
-private enum class FastbootTopTab(val labelRes: Int) {
-    ACTIONS(R.string.fastboot_tab_actions),
-    SHELL(R.string.fastboot_tab_shell),
+private enum class FastbootTopTab(val labelRes: Int, val visId: String) {
+    ACTIONS(R.string.fastboot_tab_actions, VisIds.FASTBOOT_ACTIONS),
+    SHELL(R.string.fastboot_tab_shell, VisIds.FASTBOOT_SHELL),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FastbootScreen(vm: FastbootViewModel) {
     var topTab by remember { mutableStateOf(FastbootTopTab.ACTIONS) }
+    // Sub-tabs not hidden in Settings > Appearance.
+    val visibleTabs = FastbootTopTab.entries.filter { UiVisibility.isShown(it.visId) }
+    LaunchedEffect(visibleTabs) {
+        if (topTab !in visibleTabs && visibleTabs.isNotEmpty()) topTab = visibleTabs.first()
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         FastbootDeviceConnectorCard(vm)
 
-        PrimaryTabRow(selectedTabIndex = topTab.ordinal) {
-            FastbootTopTab.entries.forEach { tab ->
+        if (visibleTabs.isEmpty()) {
+            AllSectionsHiddenHint()
+            return@Column
+        }
+
+        PrimaryTabRow(selectedTabIndex = visibleTabs.indexOf(topTab).coerceAtLeast(0)) {
+            visibleTabs.forEach { tab ->
                 Tab(
                     selected = topTab == tab,
                     onClick = { topTab = tab },
@@ -317,14 +330,15 @@ private data class ActionTileSpec(
     val titleRes: Int,
     val descriptionRes: Int,
     val destination: FastbootSubScreen,
+    val visId: String,
 )
 
 private val tileSpecs = listOf(
-    ActionTileSpec(Icons.Filled.RestartAlt, R.string.fastboot_tile_reboot_title, R.string.fastboot_tile_reboot_desc, FastbootSubScreen.Reboot),
-    ActionTileSpec(Icons.Filled.FileUpload, R.string.fastboot_tile_flash_title, R.string.fastboot_tile_flash_desc, FastbootSubScreen.FlashImage),
-    ActionTileSpec(Icons.Filled.PlayCircle, R.string.fastboot_tile_boot_title, R.string.fastboot_tile_boot_desc, FastbootSubScreen.BootImage),
-    ActionTileSpec(Icons.Filled.Lock, R.string.fastboot_tile_lock_title, R.string.fastboot_tile_lock_desc, FastbootSubScreen.LockState),
-    ActionTileSpec(Icons.Filled.Info, R.string.fastboot_tile_vars_title, R.string.fastboot_tile_vars_desc, FastbootSubScreen.Variables),
+    ActionTileSpec(Icons.Filled.RestartAlt, R.string.fastboot_tile_reboot_title, R.string.fastboot_tile_reboot_desc, FastbootSubScreen.Reboot, VisIds.FASTBOOT_REBOOT),
+    ActionTileSpec(Icons.Filled.FileUpload, R.string.fastboot_tile_flash_title, R.string.fastboot_tile_flash_desc, FastbootSubScreen.FlashImage, VisIds.FASTBOOT_FLASH),
+    ActionTileSpec(Icons.Filled.PlayCircle, R.string.fastboot_tile_boot_title, R.string.fastboot_tile_boot_desc, FastbootSubScreen.BootImage, VisIds.FASTBOOT_BOOT),
+    ActionTileSpec(Icons.Filled.Lock, R.string.fastboot_tile_lock_title, R.string.fastboot_tile_lock_desc, FastbootSubScreen.LockState, VisIds.FASTBOOT_LOCK),
+    ActionTileSpec(Icons.Filled.Info, R.string.fastboot_tile_vars_title, R.string.fastboot_tile_vars_desc, FastbootSubScreen.Variables, VisIds.FASTBOOT_VARS),
 )
 
 @Composable
@@ -351,7 +365,7 @@ fun FastbootActionsTab(vm: FastbootViewModel) {
                 )
 
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(tileSpecs) { spec ->
+                    items(tileSpecs.filter { UiVisibility.isShown(it.visId) }) { spec ->
                         FastbootActionTile(
                             icon = spec.icon,
                             title = stringResource(spec.titleRes),

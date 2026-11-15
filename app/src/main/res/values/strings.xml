@@ -543,6 +543,18 @@
     <string name="audio_buffer_hint">Same as scrcpy --audio-buffer. Higher = smoother audio but more delay; lower = less delay but may crackle on a weak connection.</string>
     <string name="settings_scrcpy_auto_start_title">Auto-start Mirroring</string>
     <string name="settings_scrcpy_auto_start_subtitle">Open the scrcpy mirror automatically when a device connects, or reconnects after the connection dropped</string>
+    <string name="settings_appearance_title">Appearance</string>
+    <string name="vis_hide_show_title">Hide/Show Sections</string>
+    <string name="vis_none_hidden">Everything is shown</string>
+    <plurals name="vis_hidden_count">
+        <item quantity="one">%1$d item hidden</item>
+        <item quantity="other">%1$d items hidden</item>
+    </plurals>
+    <string name="vis_show_all">Show all</string>
+    <string name="vis_page_hint">Switch off anything you don\'t use to hide it from the menus. Hidden settings keep their current values. Switching off a section hides everything in it.</string>
+    <string name="vis_all_hidden_hint">Everything on this page is hidden. Turn sections back on in Settings › Appearance › Hide/Show Sections.</string>
+    <string name="vis_scrcpy_presets">Presets</string>
+    <string name="vis_scrcpy_footer">Remember for this device / Reset defaults</string>
     <string name="scrcpy_preset_label">Preset: %1$s</string>
     <string name="scrcpy_preset_caption">Default is the standard settings. Quest 3 uses the recommended crop and angle for mirroring a Quest 3 onto a 16:9 screen.</string>
     <string name="scrcpy_preset_save">Save current settings to preset</string>

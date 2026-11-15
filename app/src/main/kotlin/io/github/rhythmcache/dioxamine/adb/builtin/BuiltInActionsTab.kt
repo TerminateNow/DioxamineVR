@@ -11,6 +11,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.adb.AdbViewModel
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 
 import io.github.rhythmcache.dioxamine.adb.builtin.filemanager.FileManagerScreen
 import io.github.rhythmcache.dioxamine.adb.builtin.filemanager.FileManagerTile
@@ -77,71 +79,71 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
                         )
                     }
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_HELPER)) item {
                     WirelessHelperTile(vm = vm, isConnected = isConnected)
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_METAQUEST)) item {
                     MetaQuestTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.MetaQuest }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_DEVICE_INFO)) item {
                     DeviceInformationTile(
                         vm = vm,
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.DeviceInfo }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_REMOTE)) item {
                     RemoteControlTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.RemoteControl }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_TOUCHPAD)) item {
                     TouchpadTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Touchpad }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_FILES)) item {
                     FileManagerTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.FileManager }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_PACKAGES)) item {
                     PackageManagerTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.PackageManager }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_PROCESSES)) item {
                     ProcessManagerTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.ProcessManager }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_LOGCAT)) item {
                     LogcatTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Logcat }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_MISC)) item {
                     MiscTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Misc }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_SCREENSHOT)) item {
                     ScreencapTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Screenshot }
                     )
                 }
-                item {
+                if (UiVisibility.isShown(VisIds.ADB_REBOOT)) item {
                     RebootTile(
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Reboot }

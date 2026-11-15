@@ -86,6 +86,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.rhythmcache.dioxamine.R
+import io.github.rhythmcache.dioxamine.ui.visibility.AllSectionsHiddenHint
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 import io.github.rhythmcache.dioxamine.adb.AdbViewModel
 import io.github.rhythmcache.adb.AdbDeviceMode
 import androidx.activity.compose.BackHandler
@@ -201,6 +204,20 @@ fun ScrcpyScreen(
     LaunchedEffect(isDeviceConnected) {
         if (!isDeviceConnected) {
             selectedTab = ScrcpyTab.RECORDINGS
+        }
+    }
+
+    // Sub-tabs not hidden in Settings > Appearance; never leave a hidden one selected.
+    fun ScrcpyTab.visId() = when (this) {
+        ScrcpyTab.CONFIGURATOR -> VisIds.SCRCPY_SETTINGS
+        ScrcpyTab.RECORDINGS -> VisIds.SCRCPY_RECORDINGS
+        ScrcpyTab.LOGS -> VisIds.SCRCPY_LOGS
+    }
+    val visibleScrcpyTabs = ScrcpyTab.entries.filter { UiVisibility.isShown(it.visId()) }
+    LaunchedEffect(visibleScrcpyTabs, selectedTab) {
+        if (selectedTab !in visibleScrcpyTabs && visibleScrcpyTabs.isNotEmpty()) {
+            selectedTab = visibleScrcpyTabs.firstOrNull { it != ScrcpyTab.CONFIGURATOR || isDeviceConnected }
+                ?: visibleScrcpyTabs.first()
         }
     }
 
@@ -804,39 +821,48 @@ fun ScrcpyScreen(
 
                 val disabledTabColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
 
-                PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
-                    Tab(
-                        selected = selectedTab == ScrcpyTab.CONFIGURATOR,
-                        onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.CONFIGURATOR },
-                        enabled = isDeviceConnected,
-                        unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
-                        text = {
-                            Text(
-                                text = stringResource(R.string.scrcpy_tab_configurator),
-                                color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                if (visibleScrcpyTabs.isNotEmpty()) {
+                    PrimaryTabRow(selectedTabIndex = visibleScrcpyTabs.indexOf(selectedTab).coerceAtLeast(0)) {
+                        if (ScrcpyTab.CONFIGURATOR in visibleScrcpyTabs) {
+                            Tab(
+                                selected = selectedTab == ScrcpyTab.CONFIGURATOR,
+                                onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.CONFIGURATOR },
+                                enabled = isDeviceConnected,
+                                unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
+                                text = {
+                                    Text(
+                                        text = stringResource(R.string.scrcpy_tab_configurator),
+                                        color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                                    )
+                                },
                             )
-                        },
-                    )
-                    Tab(
-                        selected = selectedTab == ScrcpyTab.RECORDINGS,
-                        onClick = { selectedTab = ScrcpyTab.RECORDINGS },
-                        text = { Text(stringResource(R.string.scrcpy_tab_recordings)) },
-                    )
-                    Tab(
-                        selected = selectedTab == ScrcpyTab.LOGS,
-                        onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.LOGS },
-                        enabled = isDeviceConnected,
-                        unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
-                        text = {
-                            Text(
-                                text = stringResource(R.string.scrcpy_tab_logs),
-                                color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                        }
+                        if (ScrcpyTab.RECORDINGS in visibleScrcpyTabs) {
+                            Tab(
+                                selected = selectedTab == ScrcpyTab.RECORDINGS,
+                                onClick = { selectedTab = ScrcpyTab.RECORDINGS },
+                                text = { Text(stringResource(R.string.scrcpy_tab_recordings)) },
                             )
-                        },
-                    )
+                        }
+                        if (ScrcpyTab.LOGS in visibleScrcpyTabs) {
+                            Tab(
+                                selected = selectedTab == ScrcpyTab.LOGS,
+                                onClick = { if (isDeviceConnected) selectedTab = ScrcpyTab.LOGS },
+                                enabled = isDeviceConnected,
+                                unselectedContentColor = if (isDeviceConnected) MaterialTheme.colorScheme.onSurfaceVariant else disabledTabColor,
+                                text = {
+                                    Text(
+                                        text = stringResource(R.string.scrcpy_tab_logs),
+                                        color = if (isDeviceConnected) Color.Unspecified else disabledTabColor,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                } else {
+                    AllSectionsHiddenHint()
                 }
-
-            when (selectedTab) {
+            if (visibleScrcpyTabs.isNotEmpty()) when (selectedTab) {
                 ScrcpyTab.CONFIGURATOR -> {
                     Column(
                         modifier = Modifier
@@ -844,135 +870,150 @@ fun ScrcpyScreen(
                             .verticalScroll(scrollState)
                             .padding(16.dp)
                     ) {
-                        // Presets: pick / load / save / delete / add named settings.
-                        ScrcpyPresetBar(
-                            currentConfig = config,
-                            isMirroring = isMirroring,
-                            onLoad = { preset ->
-                                config = preset
-                                scrcpyVm.showFloatingNav = preset.showFloatingNav
-                                scrcpyVm.showTouchpadOverlay = preset.showTouchpad
-                                scrcpyVm.showKeyboard = preset.showKeyboard
-                                if (rememberSettings && deviceKey != null) {
-                                    ScrcpyConfigStore.save(context, deviceKey, preset)
-                                }
-                            },
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
+                        if (UiVisibility.isShown(VisIds.SCRCPY_PRESETS)) {
+                            // Presets: pick / load / save / delete / add named settings.
+                            ScrcpyPresetBar(
+                                currentConfig = config,
+                                isMirroring = isMirroring,
+                                onLoad = { preset ->
+                                    config = preset
+                                    scrcpyVm.showFloatingNav = preset.showFloatingNav
+                                    scrcpyVm.showTouchpadOverlay = preset.showTouchpad
+                                    scrcpyVm.showKeyboard = preset.showKeyboard
+                                    if (rememberSettings && deviceKey != null) {
+                                        ScrcpyConfigStore.save(context, deviceKey, preset)
+                                    }
+                                },
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            )
+                        }
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                VideoSettings(
-                                    config = config,
-                                    isMirroring = isMirroring,
-                                    supportsAudio = supportsAudio,
-                                    supportsCamera = supportsCamera,
-                                    supportsVirtual = supportsVirtual,
-                                    apiLevel = apiLevel,
-                                    allowCustomValues = allowCustomValues,
-                                    customMaxSizes = customMaxSizes,
-                                    customFps = customFps,
-                                    customBitrates = customBitrates,
-                                    customDpis = customDpis,
-                                    discoveredCameras = discoveredCameras,
-                                    cameraDiscoveryState = cameraDiscoveryState,
-                                    discoveredApps = discoveredApps,
-                                    appDiscoveryState = appDiscoveryState,
-                                    onRefreshCameras = {
-                                        activeId?.let { ScrcpyDiscoveryCache.clearCameras(it) }
-                                        discoveredCameras = emptyList()
-                                        if (supportsCamera && config.videoSource == "camera") {
-                                            cameraDiscoveryState = DiscoveryState.LOADING
+                                val showVideoGroup = UiVisibility.isShown(VisIds.SCRCPY_VIDEO)
+                                val showAudioGroup = UiVisibility.isShown(VisIds.SCRCPY_AUDIO)
+                                val showDisplayGroup = UiVisibility.isShown(VisIds.SCRCPY_DISPLAY)
+                                if (showVideoGroup) {
+                                    VideoSettings(
+                                        config = config,
+                                        isMirroring = isMirroring,
+                                        supportsAudio = supportsAudio,
+                                        supportsCamera = supportsCamera,
+                                        supportsVirtual = supportsVirtual,
+                                        apiLevel = apiLevel,
+                                        allowCustomValues = allowCustomValues,
+                                        customMaxSizes = customMaxSizes,
+                                        customFps = customFps,
+                                        customBitrates = customBitrates,
+                                        customDpis = customDpis,
+                                        discoveredCameras = discoveredCameras,
+                                        cameraDiscoveryState = cameraDiscoveryState,
+                                        discoveredApps = discoveredApps,
+                                        appDiscoveryState = appDiscoveryState,
+                                        onRefreshCameras = {
+                                            activeId?.let { ScrcpyDiscoveryCache.clearCameras(it) }
+                                            discoveredCameras = emptyList()
+                                            if (supportsCamera && config.videoSource == "camera") {
+                                                cameraDiscoveryState = DiscoveryState.LOADING
+                                            }
+                                            refreshCamerasTrigger++
+                                        },
+                                        onRefreshApps = {
+                                            activeId?.let { ScrcpyDiscoveryCache.clearApps(it) }
+                                            discoveredApps = emptyList()
+                                            if (supportsVirtual && config.videoSource == "virtual") {
+                                                appDiscoveryState = DiscoveryState.LOADING
+                                            }
+                                            refreshAppsTrigger++
+                                        },
+                                        onConfigChange = { config = it },
+                                        onOpenAddDialog = { type ->
+                                            activeAddDialog = type
+                                            dialogInputValue = ""
+                                            dialogErrorMsg = null
                                         }
-                                        refreshCamerasTrigger++
-                                    },
-                                    onRefreshApps = {
-                                        activeId?.let { ScrcpyDiscoveryCache.clearApps(it) }
-                                        discoveredApps = emptyList()
-                                        if (supportsVirtual && config.videoSource == "virtual") {
-                                            appDiscoveryState = DiscoveryState.LOADING
+                                    )
+                                }
+
+                                if (showAudioGroup) {
+                                    if (showVideoGroup) {
+                                        Spacer(Modifier.height(12.dp))
+                                        HorizontalDivider()
+                                        Spacer(Modifier.height(12.dp))
+                                    }
+
+                                    AudioSettings(
+                                        config = config,
+                                        isMirroring = isMirroring,
+                                        supportsAudio = supportsAudio,
+                                        apiLevel = apiLevel,
+                                        allowCustomValues = allowCustomValues,
+                                        customAudioBitrates = customAudioBitrates,
+                                        onConfigChange = { config = it },
+                                        onOpenAddDialog = { type ->
+                                            activeAddDialog = type
+                                            dialogInputValue = ""
+                                            dialogErrorMsg = null
                                         }
-                                        refreshAppsTrigger++
-                                    },
-                                    onConfigChange = { config = it },
-                                    onOpenAddDialog = { type ->
-                                        activeAddDialog = type
-                                        dialogInputValue = ""
-                                        dialogErrorMsg = null
+                                    )
+                                }
+
+                                if (showDisplayGroup) {
+                                    if (showVideoGroup || showAudioGroup) {
+                                        Spacer(Modifier.height(12.dp))
+                                        HorizontalDivider()
+                                        Spacer(Modifier.height(12.dp))
                                     }
-                                )
 
-                                Spacer(Modifier.height(12.dp))
-                                HorizontalDivider()
-                                Spacer(Modifier.height(12.dp))
-
-                                AudioSettings(
-                                    config = config,
-                                    isMirroring = isMirroring,
-                                    supportsAudio = supportsAudio,
-                                    apiLevel = apiLevel,
-                                    allowCustomValues = allowCustomValues,
-                                    customAudioBitrates = customAudioBitrates,
-                                    onConfigChange = { config = it },
-                                    onOpenAddDialog = { type ->
-                                        activeAddDialog = type
-                                        dialogInputValue = ""
-                                        dialogErrorMsg = null
-                                    }
-                                )
-
-                                Spacer(Modifier.height(12.dp))
-                                HorizontalDivider()
-                                Spacer(Modifier.height(12.dp))
-
-                                DisplaySettings(
-                                    config = config,
-                                    isMirroring = isMirroring,
-                                    showFloatingNav = scrcpyVm.showFloatingNav,
-                                    showTouchpadOverlay = scrcpyVm.showTouchpadOverlay,
-                                    showKeyboard = scrcpyVm.showKeyboard,
-                                    onShowFloatingNavChange = { next ->
-                                        if (config.videoEnabled && config.videoSource != "camera") {
-                                            scrcpyVm.showFloatingNav = next
-                                            config = config.copy(showFloatingNav = next)
+                                    DisplaySettings(
+                                        config = config,
+                                        isMirroring = isMirroring,
+                                        showFloatingNav = scrcpyVm.showFloatingNav,
+                                        showTouchpadOverlay = scrcpyVm.showTouchpadOverlay,
+                                        showKeyboard = scrcpyVm.showKeyboard,
+                                        onShowFloatingNavChange = { next ->
+                                            if (config.videoEnabled && config.videoSource != "camera") {
+                                                scrcpyVm.showFloatingNav = next
+                                                config = config.copy(showFloatingNav = next)
+                                                if (rememberSettings && deviceKey != null) {
+                                                    ScrcpyConfigStore.save(context, deviceKey, config)
+                                                }
+                                            }
+                                        },
+                                        onShowTouchpadChange = { next ->
+                                            if (config.videoEnabled && config.videoSource != "camera") {
+                                                scrcpyVm.showTouchpadOverlay = next
+                                                config = config.copy(showTouchpad = next)
+                                                if (next) activeSession?.ensureUhidDevices()
+                                                if (rememberSettings && deviceKey != null) {
+                                                    ScrcpyConfigStore.save(context, deviceKey, config)
+                                                }
+                                            }
+                                        },
+                                        onShowKeyboardChange = { next ->
+                                            if (config.videoEnabled && config.videoSource != "camera") {
+                                                scrcpyVm.showKeyboard = next
+                                                config = config.copy(showKeyboard = next)
+                                                if (next) activeSession?.ensureUhidDevices()
+                                                if (rememberSettings && deviceKey != null) {
+                                                    ScrcpyConfigStore.save(context, deviceKey, config)
+                                                }
+                                            }
+                                        },
+                                        onConfigChange = {
+                                            config = it
+                                            if (config.videoEnabled && config.videoSource != "camera") {
+                                                activeSession?.clipboardSyncEnabled = it.clipboardSync
+                                            }
                                             if (rememberSettings && deviceKey != null) {
-                                                ScrcpyConfigStore.save(context, deviceKey, config)
+                                                ScrcpyConfigStore.save(context, deviceKey, it)
                                             }
                                         }
-                                    },
-                                    onShowTouchpadChange = { next ->
-                                        if (config.videoEnabled && config.videoSource != "camera") {
-                                            scrcpyVm.showTouchpadOverlay = next
-                                            config = config.copy(showTouchpad = next)
-                                            if (next) activeSession?.ensureUhidDevices()
-                                            if (rememberSettings && deviceKey != null) {
-                                                ScrcpyConfigStore.save(context, deviceKey, config)
-                                            }
-                                        }
-                                    },
-                                    onShowKeyboardChange = { next ->
-                                        if (config.videoEnabled && config.videoSource != "camera") {
-                                            scrcpyVm.showKeyboard = next
-                                            config = config.copy(showKeyboard = next)
-                                            if (next) activeSession?.ensureUhidDevices()
-                                            if (rememberSettings && deviceKey != null) {
-                                                ScrcpyConfigStore.save(context, deviceKey, config)
-                                            }
-                                        }
-                                    },
-                                    onConfigChange = {
-                                        config = it
-                                        if (config.videoEnabled && config.videoSource != "camera") {
-                                            activeSession?.clipboardSyncEnabled = it.clipboardSync
-                                        }
-                                        if (rememberSettings && deviceKey != null) {
-                                            ScrcpyConfigStore.save(context, deviceKey, it)
-                                        }
-                                    }
-                                )
+                                    )
+                                }
 
                                 Spacer(Modifier.height(16.dp))
 
-                                if (isDeviceConnected && deviceKey != null) {
+                                if (isDeviceConnected && deviceKey != null && UiVisibility.isShown(VisIds.SCRCPY_FOOTER)) {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1928,327 +1969,349 @@ private fun VideoSettings(
     Text(stringResource(R.string.section_video), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
 
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus1 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = config.videoEnabled,
-            enabled = !isMirroring,
-            role = Role.Switch,
-            interactionSource = switchRowFocus1,
-            indication = null,
-            onValueChange = { isChecked ->
-                val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
-                    config.copy(videoEnabled = false, audioEnabled = true)
-                } else {
-                    config.copy(videoEnabled = isChecked)
+    if (UiVisibility.isShown(VisIds.SCRCPY_VIDEO_ENABLE)) {
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus1 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = config.videoEnabled,
+                enabled = !isMirroring,
+                role = Role.Switch,
+                interactionSource = switchRowFocus1,
+                indication = null,
+                onValueChange = { isChecked ->
+                    val newConfig = if (!isChecked && supportsAudio && !config.audioEnabled) {
+                        config.copy(videoEnabled = false, audioEnabled = true)
+                    } else {
+                        config.copy(videoEnabled = isChecked)
+                    }
+                    onConfigChange(newConfig)
                 }
-                onConfigChange(newConfig)
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.video_enable_title), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(R.string.video_enable_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(stringResource(R.string.video_enable_title), style = MaterialTheme.typography.bodyMedium)
-            Text(
-                stringResource(R.string.video_enable_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            Switch(
+                checked = config.videoEnabled,
+                interactionSource = switchRowFocus1,
+                onCheckedChange = null,
+                enabled = !isMirroring
             )
         }
-        Switch(
-            checked = config.videoEnabled,
-            interactionSource = switchRowFocus1,
-            onCheckedChange = null,
-            enabled = !isMirroring
-        )
     }
 
     if (!config.videoEnabled) return
 
     Spacer(Modifier.height(8.dp))
 
-    VideoSourceSettings(
-        config = config,
-        isMirroring = isMirroring,
-        supportsCamera = supportsCamera,
-        supportsVirtual = supportsVirtual,
-        apiLevel = apiLevel,
-        onConfigChange = onConfigChange
-    )
+    if (UiVisibility.isShown(VisIds.SCRCPY_VIDEO_SOURCE)) {
+        VideoSourceSettings(
+            config = config,
+            isMirroring = isMirroring,
+            supportsCamera = supportsCamera,
+            supportsVirtual = supportsVirtual,
+            apiLevel = apiLevel,
+            onConfigChange = onConfigChange
+        )
+    }
 
-    CameraSettings(
-        config = config,
-        isMirroring = isMirroring,
-        discoveredCameras = discoveredCameras,
-        discoveryState = cameraDiscoveryState,
-        onRefreshCameras = onRefreshCameras,
-        onConfigChange = onConfigChange
-    )
+    if (UiVisibility.isShown(VisIds.SCRCPY_CAMERA)) {
+        CameraSettings(
+            config = config,
+            isMirroring = isMirroring,
+            discoveredCameras = discoveredCameras,
+            discoveryState = cameraDiscoveryState,
+            onRefreshCameras = onRefreshCameras,
+            onConfigChange = onConfigChange
+        )
+    }
 
-    VirtualScreenSettings(
-        config = config,
-        isMirroring = isMirroring,
-        discoveredApps = discoveredApps,
-        discoveryState = appDiscoveryState,
-        onRefreshApps = onRefreshApps,
-        allowCustomValues = allowCustomValues,
-        customDpis = customDpis,
-        onConfigChange = onConfigChange,
-        onOpenAddDialog = onOpenAddDialog
-    )
+    if (UiVisibility.isShown(VisIds.SCRCPY_VIRTUAL)) {
+        VirtualScreenSettings(
+            config = config,
+            isMirroring = isMirroring,
+            discoveredApps = discoveredApps,
+            discoveryState = appDiscoveryState,
+            onRefreshApps = onRefreshApps,
+            allowCustomValues = allowCustomValues,
+            customDpis = customDpis,
+            onConfigChange = onConfigChange,
+            onOpenAddDialog = onOpenAddDialog
+        )
+    }
 
     if (config.videoSource != "camera") {
-        Text(stringResource(R.string.label_resolution), style = MaterialTheme.typography.labelMedium)
+        if (UiVisibility.isShown(VisIds.SCRCPY_MAX_SIZE)) {
+            Text(stringResource(R.string.label_resolution), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val defaultResolutions = listOf(
+                    stringResource(R.string.res_1080p) to 1080,
+                    stringResource(R.string.res_720p) to 720,
+                    stringResource(R.string.res_480p) to 480,
+                    stringResource(R.string.res_auto) to 0
+                )
+                defaultResolutions.forEach { (label, value) ->
+                    FilterChip(
+                        selected = config.maxSize == value,
+                        onClick = { onConfigChange(config.copy(maxSize = value)) },
+                        enabled = !isMirroring,
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+                if (allowCustomValues) {
+                    customMaxSizes.forEach { customVal ->
+                        FilterChip(
+                            selected = config.maxSize == customVal,
+                            onClick = { onConfigChange(config.copy(maxSize = customVal)) },
+                            enabled = !isMirroring,
+                            label = { Text("${customVal}p", style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                    FilterChip(
+                        selected = false,
+                        onClick = { onOpenAddDialog(AddCustomDialogType.MAX_SIZE) },
+                        enabled = !isMirroring,
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        if (UiVisibility.isShown(VisIds.SCRCPY_FPS)) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_frame_rate), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val defaultFps = listOf(60, 30, 15)
+                defaultFps.forEach { fps ->
+                    FilterChip(
+                        selected = config.maxFps == fps,
+                        onClick = { onConfigChange(config.copy(maxFps = fps)) },
+                        enabled = !isMirroring,
+                        label = { Text(stringResource(R.string.label_fps_format, fps), style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+                if (allowCustomValues) {
+                    customFps.forEach { customVal ->
+                        FilterChip(
+                            selected = config.maxFps == customVal,
+                            onClick = { onConfigChange(config.copy(maxFps = customVal)) },
+                            enabled = !isMirroring,
+                            label = { Text(stringResource(R.string.label_fps_format, customVal), style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                    FilterChip(
+                        selected = false,
+                        onClick = { onOpenAddDialog(AddCustomDialogType.FPS) },
+                        enabled = !isMirroring,
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+
+    if (UiVisibility.isShown(VisIds.SCRCPY_BITRATE)) {
+        Text(stringResource(R.string.label_bitrate), style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.height(4.dp))
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            val defaultResolutions = listOf(
-                stringResource(R.string.res_1080p) to 1080,
-                stringResource(R.string.res_720p) to 720,
-                stringResource(R.string.res_480p) to 480,
-                stringResource(R.string.res_auto) to 0
-            )
-            defaultResolutions.forEach { (label, value) ->
+            listOf(8, 4, 2).forEach { mbps ->
                 FilterChip(
-                    selected = config.maxSize == value,
-                    onClick = { onConfigChange(config.copy(maxSize = value)) },
+                    selected = config.bitRateMbps == mbps,
+                    onClick = { onConfigChange(config.copy(bitRateMbps = mbps)) },
+                    enabled = !isMirroring,
+                    label = { Text(stringResource(R.string.label_mbps_format, mbps), style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+            if (allowCustomValues) {
+                customBitrates.forEach { customVal ->
+                    FilterChip(
+                        selected = config.bitRateMbps == customVal,
+                        onClick = { onConfigChange(config.copy(bitRateMbps = customVal)) },
+                        enabled = !isMirroring,
+                        label = { Text(stringResource(R.string.label_mbps_format, customVal), style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+                FilterChip(
+                    selected = false,
+                    onClick = { onOpenAddDialog(AddCustomDialogType.BITRATE) },
+                    enabled = !isMirroring,
+                    label = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    if (UiVisibility.isShown(VisIds.SCRCPY_CODEC)) {
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_codec), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                stringResource(R.string.codec_h264) to "h264",
+                stringResource(R.string.codec_h265) to "h265",
+                stringResource(R.string.codec_av1) to "av1",
+                stringResource(R.string.codec_vp8) to "vp8",
+                stringResource(R.string.codec_vp9) to "vp9"
+            ).forEach { (label, value) ->
+                val isEnabled = !isMirroring && (!config.cameraHighSpeed || value == "h264")
+                FilterChip(
+                    selected = config.videoCodec == value,
+                    onClick = { onConfigChange(config.copy(videoCodec = value)) },
+                    enabled = isEnabled,
+                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+        }
+        if (config.videoCodec in listOf("av1", "vp8", "vp9")) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.scrcpy_recording_codec_warning),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+
+    if (UiVisibility.isShown(VisIds.SCRCPY_ORIENTATION)) {
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_orientation), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                stringResource(R.string.orient_normal) to "0",
+                stringResource(R.string.orient_90) to "90",
+                stringResource(R.string.orient_180) to "180",
+                stringResource(R.string.orient_270) to "270",
+                stringResource(R.string.orient_flip_0) to "flip0",
+                stringResource(R.string.orient_flip_90) to "flip90",
+                stringResource(R.string.orient_flip_180) to "flip180",
+                stringResource(R.string.orient_flip_270) to "flip270"
+            ).forEach { (label, value) ->
+                FilterChip(
+                    selected = config.captureOrientation == value || (config.captureOrientation == null && value == "0"),
+                    onClick = { onConfigChange(config.copy(captureOrientation = if (value == "0") null else value)) },
                     enabled = !isMirroring,
                     label = { Text(label, style = MaterialTheme.typography.labelSmall) }
                 )
             }
-            if (allowCustomValues) {
-                customMaxSizes.forEach { customVal ->
-                    FilterChip(
-                        selected = config.maxSize == customVal,
-                        onClick = { onConfigChange(config.copy(maxSize = customVal)) },
-                        enabled = !isMirroring,
-                        label = { Text("${customVal}p", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                FilterChip(
-                    selected = false,
-                    onClick = { onOpenAddDialog(AddCustomDialogType.MAX_SIZE) },
-                    enabled = !isMirroring,
-                    label = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_frame_rate), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            val defaultFps = listOf(60, 30, 15)
-            defaultFps.forEach { fps ->
-                FilterChip(
-                    selected = config.maxFps == fps,
-                    onClick = { onConfigChange(config.copy(maxFps = fps)) },
-                    enabled = !isMirroring,
-                    label = { Text(stringResource(R.string.label_fps_format, fps), style = MaterialTheme.typography.labelSmall) }
-                )
-            }
-            if (allowCustomValues) {
-                customFps.forEach { customVal ->
-                    FilterChip(
-                        selected = config.maxFps == customVal,
-                        onClick = { onConfigChange(config.copy(maxFps = customVal)) },
-                        enabled = !isMirroring,
-                        label = { Text(stringResource(R.string.label_fps_format, customVal), style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                FilterChip(
-                    selected = false,
-                    onClick = { onOpenAddDialog(AddCustomDialogType.FPS) },
-                    enabled = !isMirroring,
-                    label = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-    }
-
-    Text(stringResource(R.string.label_bitrate), style = MaterialTheme.typography.labelMedium)
-    Spacer(Modifier.height(4.dp))
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        listOf(8, 4, 2).forEach { mbps ->
-            FilterChip(
-                selected = config.bitRateMbps == mbps,
-                onClick = { onConfigChange(config.copy(bitRateMbps = mbps)) },
-                enabled = !isMirroring,
-                label = { Text(stringResource(R.string.label_mbps_format, mbps), style = MaterialTheme.typography.labelSmall) }
-            )
-        }
-        if (allowCustomValues) {
-            customBitrates.forEach { customVal ->
-                FilterChip(
-                    selected = config.bitRateMbps == customVal,
-                    onClick = { onConfigChange(config.copy(bitRateMbps = customVal)) },
-                    enabled = !isMirroring,
-                    label = { Text(stringResource(R.string.label_mbps_format, customVal), style = MaterialTheme.typography.labelSmall) }
-                )
-            }
-            FilterChip(
-                selected = false,
-                onClick = { onOpenAddDialog(AddCustomDialogType.BITRATE) },
-                enabled = !isMirroring,
-                label = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.label_add_chip), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            )
-        }
-    }
-
-    Spacer(Modifier.height(8.dp))
-    Text(stringResource(R.string.label_codec), style = MaterialTheme.typography.labelMedium)
-    Spacer(Modifier.height(4.dp))
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        listOf(
-            stringResource(R.string.codec_h264) to "h264",
-            stringResource(R.string.codec_h265) to "h265",
-            stringResource(R.string.codec_av1) to "av1",
-            stringResource(R.string.codec_vp8) to "vp8",
-            stringResource(R.string.codec_vp9) to "vp9"
-        ).forEach { (label, value) ->
-            val isEnabled = !isMirroring && (!config.cameraHighSpeed || value == "h264")
-            FilterChip(
-                selected = config.videoCodec == value,
-                onClick = { onConfigChange(config.copy(videoCodec = value)) },
-                enabled = isEnabled,
-                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-            )
-        }
-    }
-    if (config.videoCodec in listOf("av1", "vp8", "vp9")) {
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = stringResource(R.string.scrcpy_recording_codec_warning),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.error
-        )
-    }
-
-    Spacer(Modifier.height(8.dp))
-    Text(stringResource(R.string.label_orientation), style = MaterialTheme.typography.labelMedium)
-    Spacer(Modifier.height(4.dp))
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        listOf(
-            stringResource(R.string.orient_normal) to "0",
-            stringResource(R.string.orient_90) to "90",
-            stringResource(R.string.orient_180) to "180",
-            stringResource(R.string.orient_270) to "270",
-            stringResource(R.string.orient_flip_0) to "flip0",
-            stringResource(R.string.orient_flip_90) to "flip90",
-            stringResource(R.string.orient_flip_180) to "flip180",
-            stringResource(R.string.orient_flip_270) to "flip270"
-        ).forEach { (label, value) ->
-            FilterChip(
-                selected = config.captureOrientation == value || (config.captureOrientation == null && value == "0"),
-                onClick = { onConfigChange(config.copy(captureOrientation = if (value == "0") null else value)) },
-                enabled = !isMirroring,
-                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-            )
         }
     }
 
     if (config.videoSource == "display") {
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_crop), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        val cropValue = config.crop.orEmpty()
-        val cropInvalid = cropValue.isNotEmpty() && !ScrcpyConfig.isValidCrop(cropValue)
-        OutlinedTextField(
-            value = cropValue,
-            onValueChange = { input ->
-                val cleaned = input.filter { it.isDigit() || it == ':' }
-                onConfigChange(config.copy(crop = cleaned.ifEmpty { null }))
-            },
-            enabled = !isMirroring,
-            singleLine = true,
-            isError = cropInvalid,
-            placeholder = { Text("1280:720:0:0") },
-            supportingText = {
-                Text(
-                    stringResource(if (cropInvalid) R.string.crop_invalid else R.string.crop_hint),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_angle), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        val angleValue = config.angle.orEmpty()
-        val angleInvalid = angleValue.isNotEmpty() && !ScrcpyConfig.isValidAngle(angleValue)
-        Row(
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OutlinedButton(
-                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, -1.0))) },
-                enabled = !isMirroring,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.padding(top = 4.dp).size(48.dp)
-            ) {
-                Text("\u2212", style = MaterialTheme.typography.titleLarge)
-            }
+        if (UiVisibility.isShown(VisIds.SCRCPY_CROP)) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_crop), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            val cropValue = config.crop.orEmpty()
+            val cropInvalid = cropValue.isNotEmpty() && !ScrcpyConfig.isValidCrop(cropValue)
             OutlinedTextField(
-                value = angleValue,
+                value = cropValue,
                 onValueChange = { input ->
-                    val cleaned = input.filter { it.isDigit() || it == '-' || it == '.' }
-                    onConfigChange(config.copy(angle = cleaned.ifEmpty { null }))
+                    val cleaned = input.filter { it.isDigit() || it == ':' }
+                    onConfigChange(config.copy(crop = cleaned.ifEmpty { null }))
                 },
                 enabled = !isMirroring,
                 singleLine = true,
-                isError = angleInvalid,
-                placeholder = { Text("0") },
+                isError = cropInvalid,
+                placeholder = { Text("1280:720:0:0") },
                 supportingText = {
                     Text(
-                        stringResource(if (angleInvalid) R.string.angle_invalid else R.string.angle_hint),
+                        stringResource(if (cropInvalid) R.string.crop_invalid else R.string.crop_hint),
                         style = MaterialTheme.typography.labelSmall
                     )
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             )
-            OutlinedButton(
-                onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, 1.0))) },
-                enabled = !isMirroring,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.padding(top = 4.dp).size(48.dp)
+        }
+
+        if (UiVisibility.isShown(VisIds.SCRCPY_ANGLE)) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_angle), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            val angleValue = config.angle.orEmpty()
+            val angleInvalid = angleValue.isNotEmpty() && !ScrcpyConfig.isValidAngle(angleValue)
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text("+", style = MaterialTheme.typography.titleLarge)
+                OutlinedButton(
+                    onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, -1.0))) },
+                    enabled = !isMirroring,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.padding(top = 4.dp).size(48.dp)
+                ) {
+                    Text("\u2212", style = MaterialTheme.typography.titleLarge)
+                }
+                OutlinedTextField(
+                    value = angleValue,
+                    onValueChange = { input ->
+                        val cleaned = input.filter { it.isDigit() || it == '-' || it == '.' }
+                        onConfigChange(config.copy(angle = cleaned.ifEmpty { null }))
+                    },
+                    enabled = !isMirroring,
+                    singleLine = true,
+                    isError = angleInvalid,
+                    placeholder = { Text("0") },
+                    supportingText = {
+                        Text(
+                            stringResource(if (angleInvalid) R.string.angle_invalid else R.string.angle_hint),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = { onConfigChange(config.copy(angle = ScrcpyConfig.stepAngle(config.angle, 1.0))) },
+                    enabled = !isMirroring,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.padding(top = 4.dp).size(48.dp)
+                ) {
+                    Text("+", style = MaterialTheme.typography.titleLarge)
+                }
             }
         }
     }
@@ -2268,116 +2331,124 @@ private fun AudioSettings(
     Text(stringResource(R.string.section_audio), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
 
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus2 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = config.audioEnabled && supportsAudio,
-            enabled = supportsAudio && !isMirroring,
-            role = Role.Switch,
-            interactionSource = switchRowFocus2,
-            indication = null,
-            onValueChange = { onConfigChange(config.copy(audioEnabled = it)) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(stringResource(R.string.audio_enable_title), style = MaterialTheme.typography.bodyMedium)
-            Text(
-                if (supportsAudio) stringResource(R.string.audio_enable_subtitle_ok)
-                else stringResource(R.string.audio_enable_subtitle_req, apiLevel),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (supportsAudio) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+    if (UiVisibility.isShown(VisIds.SCRCPY_AUDIO_ENABLE)) {
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus2 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = config.audioEnabled && supportsAudio,
+                enabled = supportsAudio && !isMirroring,
+                role = Role.Switch,
+                interactionSource = switchRowFocus2,
+                indication = null,
+                onValueChange = { onConfigChange(config.copy(audioEnabled = it)) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.audio_enable_title), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (supportsAudio) stringResource(R.string.audio_enable_subtitle_ok)
+                    else stringResource(R.string.audio_enable_subtitle_req, apiLevel),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (supportsAudio) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+                )
+            }
+            Switch(
+                checked = config.audioEnabled && supportsAudio,
+                interactionSource = switchRowFocus2,
+                onCheckedChange = null,
+                enabled = supportsAudio && !isMirroring
             )
         }
-        Switch(
-            checked = config.audioEnabled && supportsAudio,
-            interactionSource = switchRowFocus2,
-            onCheckedChange = null,
-            enabled = supportsAudio && !isMirroring
-        )
     }
 
     if (config.audioEnabled && supportsAudio) {
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_audio_source), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(
-                stringResource(R.string.audio_source_device) to "output",
-                stringResource(R.string.audio_source_mic) to "mic"
-            ).forEach { (label, value) ->
-                FilterChip(
-                    selected = config.effectiveAudioSource() == value ||
-                        (value == "output" && config.effectiveAudioSource() == "playback"),
-                    onClick = { onConfigChange(config.copy(audioSource = value, audioSourceExplicit = true)) },
-                    enabled = !isMirroring,
-                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+        if (UiVisibility.isShown(VisIds.SCRCPY_AUDIO_SOURCE)) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_audio_source), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    stringResource(R.string.audio_source_device) to "output",
+                    stringResource(R.string.audio_source_mic) to "mic"
+                ).forEach { (label, value) ->
+                    FilterChip(
+                        selected = config.effectiveAudioSource() == value ||
+                            (value == "output" && config.effectiveAudioSource() == "playback"),
+                        onClick = { onConfigChange(config.copy(audioSource = value, audioSourceExplicit = true)) },
+                        enabled = !isMirroring,
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+        }
+
+        if (UiVisibility.isShown(VisIds.SCRCPY_AUDIO_FORMAT)) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_audio_format), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    stringResource(R.string.codec_opus) to "opus",
+                    stringResource(R.string.codec_aac) to "aac",
+                    stringResource(R.string.codec_flac) to "flac",
+                    stringResource(R.string.codec_raw_pcm) to "raw"
+                ).forEach { (label, value) ->
+                    FilterChip(
+                        selected = config.audioCodec == value,
+                        onClick = { onConfigChange(config.copy(audioCodec = value)) },
+                        enabled = !isMirroring,
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+            if (config.audioCodec != "aac") {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.scrcpy_recording_codec_warning),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_audio_format), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(
-                stringResource(R.string.codec_opus) to "opus",
-                stringResource(R.string.codec_aac) to "aac",
-                stringResource(R.string.codec_flac) to "flac",
-                stringResource(R.string.codec_raw_pcm) to "raw"
-            ).forEach { (label, value) ->
-                FilterChip(
-                    selected = config.audioCodec == value,
-                    onClick = { onConfigChange(config.copy(audioCodec = value)) },
-                    enabled = !isMirroring,
-                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                )
+        if (UiVisibility.isShown(VisIds.SCRCPY_AUDIO_BUFFER)) {
+            // Client-side playback buffer, like scrcpy's --audio-buffer.
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.label_audio_buffer), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(0, 20, 50, 100, 200, 500).forEach { ms ->
+                    FilterChip(
+                        selected = config.audioBufferMs == ms,
+                        onClick = { onConfigChange(config.copy(audioBufferMs = ms)) },
+                        enabled = !isMirroring,
+                        label = {
+                            Text(
+                                if (ms == 50) stringResource(R.string.audio_buffer_default_ms, ms) else "$ms ms",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    )
+                }
             }
-        }
-        if (config.audioCodec != "aac") {
             Spacer(Modifier.height(2.dp))
             Text(
-                text = stringResource(R.string.scrcpy_recording_codec_warning),
+                text = stringResource(R.string.audio_buffer_hint),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        // Client-side playback buffer, like scrcpy's --audio-buffer.
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.label_audio_buffer), style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(0, 20, 50, 100, 200, 500).forEach { ms ->
-                FilterChip(
-                    selected = config.audioBufferMs == ms,
-                    onClick = { onConfigChange(config.copy(audioBufferMs = ms)) },
-                    enabled = !isMirroring,
-                    label = {
-                        Text(
-                            if (ms == 50) stringResource(R.string.audio_buffer_default_ms, ms) else "$ms ms",
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                )
-            }
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = stringResource(R.string.audio_buffer_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (config.audioCodec == "opus" || config.audioCodec == "aac") {
+        if ((config.audioCodec == "opus" || config.audioCodec == "aac") && UiVisibility.isShown(VisIds.SCRCPY_AUDIO_BITRATE)) {
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.label_audio_bitrate), style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.height(4.dp))
@@ -2417,7 +2488,7 @@ private fun AudioSettings(
         }
 
         val showAudioDup = config.effectiveAudioSource() != "mic"
-        if (showAudioDup) {
+        if (showAudioDup && UiVisibility.isShown(VisIds.SCRCPY_AUDIO_DUP)) {
             val supportsAudioDup = apiLevel >= 33
             Spacer(Modifier.height(8.dp))
             // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
@@ -2486,224 +2557,236 @@ private fun DisplaySettings(
     )
     Spacer(Modifier.height(8.dp))
 
-    val screenOffEnabled = !isMirroring && isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus4 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = config.turnScreenOff && isDisplaySupported,
-            enabled = screenOffEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus4,
-            indication = null,
-            onValueChange = { onConfigChange(config.copy(turnScreenOff = it)) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_screen_off_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (screenOffEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_screen_off_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (screenOffEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_SCREEN_OFF)) {
+        val screenOffEnabled = !isMirroring && isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus4 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = config.turnScreenOff && isDisplaySupported,
+                enabled = screenOffEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus4,
+                indication = null,
+                onValueChange = { onConfigChange(config.copy(turnScreenOff = it)) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_screen_off_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (screenOffEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_screen_off_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (screenOffEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = config.turnScreenOff && isDisplaySupported,
+                interactionSource = switchRowFocus4,
+                onCheckedChange = null,
+                enabled = screenOffEnabled
             )
         }
-        Switch(
-            checked = config.turnScreenOff && isDisplaySupported,
-            interactionSource = switchRowFocus4,
-            onCheckedChange = null,
-            enabled = screenOffEnabled
-        )
     }
 
     Spacer(Modifier.height(8.dp))
 
-    val navEnabled = isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus5 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = showFloatingNav && isDisplaySupported,
-            enabled = navEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus5,
-            indication = null,
-            onValueChange = { onShowFloatingNavChange(it) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_floating_nav_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (navEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_floating_nav_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (navEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_FLOATING_NAV)) {
+        val navEnabled = isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus5 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = showFloatingNav && isDisplaySupported,
+                enabled = navEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus5,
+                indication = null,
+                onValueChange = { onShowFloatingNavChange(it) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_floating_nav_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (navEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_floating_nav_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (navEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = showFloatingNav && isDisplaySupported,
+                interactionSource = switchRowFocus5,
+                onCheckedChange = null,
+                enabled = navEnabled
             )
         }
-        Switch(
-            checked = showFloatingNav && isDisplaySupported,
-            interactionSource = switchRowFocus5,
-            onCheckedChange = null,
-            enabled = navEnabled
-        )
     }
 
     Spacer(Modifier.height(8.dp))
 
-    val volEnabled = isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus6 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = config.bindVolumeKeys && isDisplaySupported,
-            enabled = volEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus6,
-            indication = null,
-            onValueChange = { onConfigChange(config.copy(bindVolumeKeys = it)) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_bind_volume_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (volEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_bind_volume_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (volEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_VOLUME_KEYS)) {
+        val volEnabled = isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus6 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = config.bindVolumeKeys && isDisplaySupported,
+                enabled = volEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus6,
+                indication = null,
+                onValueChange = { onConfigChange(config.copy(bindVolumeKeys = it)) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_bind_volume_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (volEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_bind_volume_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (volEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = config.bindVolumeKeys && isDisplaySupported,
+                interactionSource = switchRowFocus6,
+                onCheckedChange = null,
+                enabled = volEnabled
             )
         }
-        Switch(
-            checked = config.bindVolumeKeys && isDisplaySupported,
-            interactionSource = switchRowFocus6,
-            onCheckedChange = null,
-            enabled = volEnabled
-        )
     }
 
     Spacer(Modifier.height(8.dp))
 
-    val clipEnabled = isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus7 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = config.clipboardSync && isDisplaySupported,
-            enabled = clipEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus7,
-            indication = null,
-            onValueChange = { onConfigChange(config.copy(clipboardSync = it)) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_clipboard_sync_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (clipEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_clipboard_sync_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (clipEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_CLIPBOARD)) {
+        val clipEnabled = isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus7 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = config.clipboardSync && isDisplaySupported,
+                enabled = clipEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus7,
+                indication = null,
+                onValueChange = { onConfigChange(config.copy(clipboardSync = it)) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_clipboard_sync_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (clipEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_clipboard_sync_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (clipEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = config.clipboardSync && isDisplaySupported,
+                interactionSource = switchRowFocus7,
+                onCheckedChange = null,
+                enabled = clipEnabled
             )
         }
-        Switch(
-            checked = config.clipboardSync && isDisplaySupported,
-            interactionSource = switchRowFocus7,
-            onCheckedChange = null,
-            enabled = clipEnabled
-        )
     }
 
     Spacer(Modifier.height(8.dp))
 
-    val touchpadEnabled = isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus8 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = showTouchpadOverlay && isDisplaySupported,
-            enabled = touchpadEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus8,
-            indication = null,
-            onValueChange = { onShowTouchpadChange(it) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_touchpad_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (touchpadEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_touchpad_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (touchpadEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_TOUCHPAD)) {
+        val touchpadEnabled = isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus8 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = showTouchpadOverlay && isDisplaySupported,
+                enabled = touchpadEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus8,
+                indication = null,
+                onValueChange = { onShowTouchpadChange(it) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_touchpad_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (touchpadEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_touchpad_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (touchpadEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = showTouchpadOverlay && isDisplaySupported,
+                interactionSource = switchRowFocus8,
+                onCheckedChange = null,
+                enabled = touchpadEnabled
             )
         }
-        Switch(
-            checked = showTouchpadOverlay && isDisplaySupported,
-            interactionSource = switchRowFocus8,
-            onCheckedChange = null,
-            enabled = touchpadEnabled
-        )
     }
 
     Spacer(Modifier.height(8.dp))
 
-    val keyboardEnabled = isDisplaySupported
-    // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-    val switchRowFocus9 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    Row(
-        modifier = Modifier.toggleable(
-            value = showKeyboard && isDisplaySupported,
-            enabled = keyboardEnabled,
-            role = Role.Switch,
-            interactionSource = switchRowFocus9,
-            indication = null,
-            onValueChange = { onShowKeyboardChange(it) }
-        ).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                stringResource(R.string.display_keyboard_title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (keyboardEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
-            )
-            Text(
-                if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_keyboard_subtitle),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (keyboardEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+    if (UiVisibility.isShown(VisIds.SCRCPY_KEYBOARD)) {
+        val keyboardEnabled = isDisplaySupported
+        // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
+        val switchRowFocus9 = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Row(
+            modifier = Modifier.toggleable(
+                value = showKeyboard && isDisplaySupported,
+                enabled = keyboardEnabled,
+                role = Role.Switch,
+                interactionSource = switchRowFocus9,
+                indication = null,
+                onValueChange = { onShowKeyboardChange(it) }
+            ).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.display_keyboard_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (keyboardEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = disabledAlpha)
+                )
+                Text(
+                    if (!isDisplaySupported) unsupportedSubtitle else stringResource(R.string.display_keyboard_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (keyboardEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = disabledAlpha)
+                )
+            }
+            Switch(
+                checked = showKeyboard && isDisplaySupported,
+                interactionSource = switchRowFocus9,
+                onCheckedChange = null,
+                enabled = keyboardEnabled
             )
         }
-        Switch(
-            checked = showKeyboard && isDisplaySupported,
-            interactionSource = switchRowFocus9,
-            onCheckedChange = null,
-            enabled = keyboardEnabled
-        )
     }
 }
 

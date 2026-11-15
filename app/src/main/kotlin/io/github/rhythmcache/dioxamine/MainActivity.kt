@@ -81,8 +81,24 @@ enum class Tab(@StringRes val labelRes: Int, val icon: androidx.compose.ui.graph
     SCRCPY(R.string.tab_scrcpy, io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons.VrHeadset),
     FASTBOOT(R.string.tab_fastboot, Icons.Filled.Bolt),
     PLUGINS(R.string.tab_plugins, Icons.Filled.Extension),
-    SETTINGS(R.string.tab_settings, Icons.Filled.Settings)
+    SETTINGS(R.string.tab_settings, Icons.Filled.Settings);
+
+    /** Id in Settings > Appearance > Hide/Show Sections; null = can't be hidden (Settings). */
+    val visId: String?
+        get() = when (this) {
+            ADB -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_ADB
+            SCRCPY -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_SCRCPY
+            FASTBOOT -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_FASTBOOT
+            PLUGINS -> io.github.rhythmcache.dioxamine.ui.visibility.VisIds.TAB_PLUGINS
+            SETTINGS -> null
+        }
+
+    val isShown: Boolean
+        get() = visId?.let { io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility.isShown(it) } ?: true
 }
+
+/** Tabs currently shown on the side rail (Settings is always there). */
+fun visibleTabs(): List<Tab> = Tab.entries.filter { it.isShown }
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -116,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         installSplashScreen()
         enableEdgeToEdge()
 
+        io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility.init(this)
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         if (prefs.getBoolean("keep_alive_enabled", false)) {
             DioxForegroundService.start(this)
@@ -196,7 +213,7 @@ fun DioxamineApp(keyDir: File) {
         if (connectedDeviceId == null || scrcpyVm.isMirroring) return@LaunchedEffect
         val autoStart = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
             .getBoolean("scrcpy_auto_start", false)
-        if (autoStart) {
+        if (autoStart && Tab.SCRCPY.isShown) {
             selectedTab = Tab.SCRCPY
             scrcpyVm.autoStartRequested = true
         }
@@ -279,9 +296,15 @@ fun DioxamineApp(keyDir: File) {
         }
     }
 
-    // Navigate back to ADB home tab before exiting app
-    BackHandler(enabled = selectedTab != Tab.ADB && !hideSideRail) {
-        selectedTab = Tab.ADB
+    // Hidden tabs (Settings > Appearance): never leave a hidden tab selected.
+    val homeTab = visibleTabs().first()
+    LaunchedEffect(selectedTab.isShown) {
+        if (!selectedTab.isShown) selectedTab = homeTab
+    }
+
+    // Navigate back to the first (home) tab before exiting app
+    BackHandler(enabled = selectedTab != homeTab && !hideSideRail) {
+        selectedTab = homeTab
     }
 
     // Remote "Back" from inside a page returns focus to the side rail first.
@@ -407,7 +430,7 @@ private fun SideTabRail(
         // Tab buttons are centered vertically on the rail
         verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)
     ) {
-        Tab.entries.forEach { tab ->
+        visibleTabs().forEach { tab ->
             SideTabRailItem(
                 tab = tab,
                 selected = tab == selectedTab,

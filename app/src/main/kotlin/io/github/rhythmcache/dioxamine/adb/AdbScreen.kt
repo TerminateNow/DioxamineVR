@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.dp
 import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.adb.builtin.BuiltInActionsTab
 import io.github.rhythmcache.dioxamine.adb.discovery.DiscoverySheet
+import io.github.rhythmcache.dioxamine.ui.visibility.AllSectionsHiddenHint
+import io.github.rhythmcache.dioxamine.ui.visibility.UiVisibility
+import io.github.rhythmcache.dioxamine.ui.visibility.VisIds
 import io.github.rhythmcache.dioxamine.adb.discovery.QrPairingScreen
 import io.github.rhythmcache.dioxamine.adb.shell.ShellScreen
 import io.github.rhythmcache.dioxamine.core.*
@@ -46,9 +49,18 @@ fun AdbScreen(
     val activeConn = vm.devices[vm.activeDeviceId]
     val mode = activeConn?.mode ?: AdbDeviceMode.UNKNOWN
 
-    // Return to Built-in sub-tab when on Shell tab
-    BackHandler(enabled = subTab != 0) {
-        subTab = 0
+    // Sub-tabs that aren't hidden in Settings > Appearance (0 = Built-in, 1 = ADB Shell).
+    val visibleSubTabs = listOfNotNull(
+        0.takeIf { UiVisibility.isShown(VisIds.ADB_BUILTIN) },
+        1.takeIf { UiVisibility.isShown(VisIds.ADB_SHELL) },
+    )
+    LaunchedEffect(visibleSubTabs) {
+        if (subTab !in visibleSubTabs && visibleSubTabs.isNotEmpty()) subTab = visibleSubTabs.first()
+    }
+
+    // Return to the first sub-tab when on another one
+    BackHandler(enabled = visibleSubTabs.isNotEmpty() && subTab != visibleSubTabs.first()) {
+        subTab = visibleSubTabs.first()
     }
 
     vm.daemonDialogMessage?.let { msg ->
@@ -75,14 +87,22 @@ fun AdbScreen(
                 RescueScreen(vm)
             }
             else -> {
-                PrimaryTabRow(selectedTabIndex = subTab) {
-                    Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text(stringResource(R.string.adb_subtab_builtin)) })
-                    Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text(stringResource(R.string.adb_subtab_adb_shell)) })
-                }
+                if (visibleSubTabs.isEmpty()) {
+                    AllSectionsHiddenHint()
+                } else {
+                    PrimaryTabRow(selectedTabIndex = visibleSubTabs.indexOf(subTab).coerceAtLeast(0)) {
+                        if (0 in visibleSubTabs) {
+                            Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text(stringResource(R.string.adb_subtab_builtin)) })
+                        }
+                        if (1 in visibleSubTabs) {
+                            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text(stringResource(R.string.adb_subtab_adb_shell)) })
+                        }
+                    }
 
-                when (subTab) {
-                    0 -> BuiltInActionsTab(vm)
-                    1 -> ShellScreen(vm)
+                    when (subTab) {
+                        0 -> BuiltInActionsTab(vm)
+                        1 -> ShellScreen(vm)
+                    }
                 }
             }
         }
