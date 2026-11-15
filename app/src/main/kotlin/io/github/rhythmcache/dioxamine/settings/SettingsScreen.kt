@@ -63,6 +63,7 @@ import androidx.core.os.LocaleListCompat
 import io.github.rhythmcache.dioxamine.BuildConfig
 import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.adb.AdbViewModel
+import io.github.rhythmcache.dioxamine.adb.PREF_AUTOCONNECT_WIRELESS
 import io.github.rhythmcache.dioxamine.core.AppLogger
 import io.github.rhythmcache.dioxamine.core.AppReleaseInfo
 import io.github.rhythmcache.dioxamine.core.AppTheme
@@ -126,6 +127,9 @@ fun SettingsScreen(vm: AdbViewModel) {
     }
     var autoConnectLocalhost by remember {
         mutableStateOf(prefs.getBoolean("adb_autoconnect_localhost", false))
+    }
+    var autoConnectWireless by remember {
+        mutableStateOf(prefs.getBoolean(PREF_AUTOCONNECT_WIRELESS, true))
     }
     var wirelessOnBoot by remember {
         mutableStateOf(prefs.getBoolean(WirelessDebugging.PREF_ENABLE_ON_BOOT, false))
@@ -547,6 +551,44 @@ fun SettingsScreen(vm: AdbViewModel) {
                                 checked = autoConnectLocalhost,
                                 enabled = detectLocalhost,
                                 interactionSource = switchRowFocus3,
+                                onCheckedChange = null)
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        val autoWirelessRowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        Row(
+                            modifier = Modifier
+                                .toggleable(
+                                    value = autoConnectWireless,
+                                    role = Role.Switch,
+                                    interactionSource = autoWirelessRowFocus,
+                                    indication = null,
+                                    onValueChange = { checked ->
+                                        autoConnectWireless = checked
+                                        prefs.edit().putBoolean(PREF_AUTOCONNECT_WIRELESS, checked).apply()
+                                        if (checked) vm.startWirelessAutoConnect()
+                                    }
+                                )
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                Text(
+                                    stringResource(R.string.settings_adb_autoconnect_wireless_title),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.settings_adb_autoconnect_wireless_subtitle),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = autoConnectWireless,
+                                interactionSource = autoWirelessRowFocus,
                                 onCheckedChange = null)
                         }
 

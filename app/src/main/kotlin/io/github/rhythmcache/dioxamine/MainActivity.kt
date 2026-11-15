@@ -165,6 +165,20 @@ fun DioxamineApp(keyDir: File) {
             return AdbViewModel(keyDir, context.applicationContext) as T
         }
     })
+    // Each time the app comes to the foreground (including first launch), look for known
+    // Wireless debugging devices on their current port and reconnect to them.
+    DisposableEffect(context) {
+        var ctx: Context? = context
+        while (ctx is android.content.ContextWrapper && ctx !is androidx.lifecycle.LifecycleOwner) {
+            ctx = ctx.baseContext
+        }
+        val lifecycle = (ctx as? androidx.lifecycle.LifecycleOwner)?.lifecycle
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) vm.startWirelessAutoConnect()
+        }
+        lifecycle?.addObserver(observer)
+        onDispose { lifecycle?.removeObserver(observer) }
+    }
     val fastbootVm: FastbootViewModel = viewModel()
     val scrcpyVm: ScrcpyViewModel = viewModel()
 

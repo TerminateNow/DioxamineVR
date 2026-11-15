@@ -21,9 +21,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import io.github.rhythmcache.dioxamine.adb.discovery.LocalAdbDetector
+import io.github.rhythmcache.dioxamine.adb.discovery.WirelessAutoConnector
 import io.github.rhythmcache.dioxamine.scrcpy.ScrcpyDiscoveryCache
 import io.github.rhythmcache.dioxamine.wirelessdebug.WirelessDebugging
 import java.io.File
+
+const val PREF_AUTOCONNECT_WIRELESS = "adb_autoconnect_wireless"
+private const val WIRELESS_AUTOCONNECT_WINDOW_MS = 60_000L
 
 class AdbViewModel(
     private val keyDir: File,
@@ -117,6 +121,96 @@ class AdbViewModel(
         }
     }
 
+    // -- Auto-connect to known Wireless debugging devices -------------------------------------
+    //
+    // Wireless debugging picks a new port every time it is turned on (e.g. after the headset
+    // reboots), so the saved "host:port" is useless. Instead we remember the serial of every device
+    // we connected to over TLS and, on app start / return to foreground / a dropped TLS connection,
+    // watch mDNS for `adb-<serial>-*` connect services and connect to the advertised port.
+
+    /** True while the mDNS watch for known wireless devices is running. */
+    var wirelessAutoConnecting by mutableStateOf(false)
+        private set
+
+    private val wirelessAutoConnector by lazy { context?.let { WirelessAutoConnector(it) } }
+    private var wirelessAutoConnectJob: Job? = null
+    private val wirelessAutoConnectAttempted = mutableSetOf<String>()
+
+    private fun isConnectedOrConnecting(conn: DeviceConnection) =
+        conn.state is ConnectionState.Connected || conn.state is ConnectionState.Connecting
+
+    /** Safe to call repeatedly; does nothing if disabled, already running, or nothing is known. */
+    fun startWirelessAutoConnect() {
+        val ctx = context ?: return
+        if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
+        if (wirelessAutoConnectJob?.isActive == true) return
+        val known = KnownWirelessDevices.getAll(ctx).toSet()
+        if (known.isEmpty()) return
+        val pending = known.filter { serial ->
+            devices.values.none { it.uniqueId == serial && isConnectedOrConnecting(it) }
+        }
+        if (pending.isEmpty()) return
+        val connector = wirelessAutoConnector ?: return
+
+        wirelessAutoConnectAttempted.clear()
+        wirelessAutoConnecting = true
+        AppLogger.i("ADB_VM", "Looking for known wireless devices: $pending")
+        connector.start { deviceId, host, port ->
+            viewModelScope.launch(Dispatchers.Main) {
+                onWirelessServiceFound(known, deviceId, host, port)
+            }
+        }
+        wirelessAutoConnectJob = viewModelScope.launch(Dispatchers.Main) {
+            try {
+                // Keep watching for a while: after a reboot the device may take some time to get
+                // Wi-Fi and turn Wireless debugging back on.
+                val deadline = System.currentTimeMillis() + WIRELESS_AUTOCONNECT_WINDOW_MS
+                while (isActive && System.currentTimeMillis() < deadline) {
+                    val allFound = known.all { serial ->
+                        devices.values.any { it.uniqueId == serial && it.state is ConnectionState.Connected }
+                    }
+                    if (allFound) break
+                    kotlinx.coroutines.delay(1000)
+                }
+            } finally {
+                connector.stop()
+                wirelessAutoConnecting = false
+            }
+        }
+    }
+
+    private fun onWirelessServiceFound(known: Set<String>, deviceId: String, host: String, port: Int) {
+        if (deviceId !in known) return
+        val key = "$host:$port"
+        if (!wirelessAutoConnectAttempted.add(key)) return
+        if (devices.values.any { it.uniqueId == deviceId && isConnectedOrConnecting(it) }) return
+        if (devices["tls:$key"]?.let { isConnectedOrConnecting(it) } == true) return
+
+        AppLogger.i("ADB_VM", "Known wireless device $deviceId found at $key, connecting")
+        connectTls(host, port) { success, _ ->
+            if (success) {
+                // Drop stale entries left over from the device's previous port.
+                devices.entries
+                    .filter { (id, conn) ->
+                        id != "tls:$key" && conn.state is ConnectionState.Error &&
+                            (conn.uniqueId == deviceId || id.startsWith("tls:$host:"))
+                    }
+                    .map { it.key }
+                    .forEach { devices.remove(it); ScrcpyDiscoveryCache.clear(it) }
+            }
+        }
+    }
+
+    private fun rememberWirelessDevice(serial: String?) {
+        val ctx = context ?: return
+        if (!serial.isNullOrBlank()) KnownWirelessDevices.add(ctx, serial)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        wirelessAutoConnector?.stop()
+    }
+
     fun triggerLocalAdbCheck() {
         viewModelScope.launch(Dispatchers.IO) {
             autoConnectLocalAdbIfEnabled()
@@ -186,8 +280,14 @@ class AdbViewModel(
                         isRoot = details.isRoot
                     )
                     AppLogger.i("ADB_VM", "AdbViewModel: Auto-reconnected $id successfully")
+                    if (isTls) rememberWirelessDevice(details.uniqueId)
                 } catch (e: Exception) {
                     devices[id] = conn.copy(client = null, state = ConnectionState.Error("Connection lost: ${e.message}"))
+                    // Wireless debugging likely came back on a new port (e.g. the device rebooted):
+                    // look for it again over mDNS.
+                    if (isTls) {
+                        withContext(Dispatchers.Main) { startWirelessAutoConnect() }
+                    }
                 }
             }
         }
@@ -368,6 +468,7 @@ class AdbViewModel(
                     uniqueId = details.uniqueId ?: id
                 )
                 if (activeDeviceId == null) activeDeviceId = id
+                rememberWirelessDevice(details.uniqueId)
                 onResult?.invoke(true, null)
             } catch (e: io.github.rhythmcache.adb.AdbException.NotPaired) {
                 devices.remove(id)

@@ -99,13 +99,28 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
 
     // On app launch, open Discover Devices straight away if nothing is connected.
     // A short grace period lets USB devices that are already plugged in finish connecting first.
+    // If a known Wireless debugging device is being looked for, give it a few seconds to be
+    // found and connected before falling back to the sheet; close the sheet if it connects later.
+    var discoveryOpenedAtStartup by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!vm.startupDiscoveryHandled) {
             vm.startupDiscoveryHandled = true
             kotlinx.coroutines.delay(800)
+            val waitUntil = System.currentTimeMillis() + 8000
+            while (vm.wirelessAutoConnecting && !vm.hasActiveDevice() && System.currentTimeMillis() < waitUntil) {
+                kotlinx.coroutines.delay(250)
+            }
             if (!vm.hasActiveDevice()) {
                 showDiscoverySheet = true
+                discoveryOpenedAtStartup = true
             }
+        }
+    }
+    val anyDeviceConnected = vm.devices.values.any { it.state is ConnectionState.Connected }
+    LaunchedEffect(anyDeviceConnected) {
+        if (anyDeviceConnected && discoveryOpenedAtStartup) {
+            showDiscoverySheet = false
+            discoveryOpenedAtStartup = false
         }
     }
 
@@ -279,7 +294,10 @@ fun DeviceConnectorCard(vm: AdbViewModel) {
     }
 
     if (showDiscoverySheet) {
-        DiscoverySheet(vm, onDismiss = { showDiscoverySheet = false })
+        DiscoverySheet(vm, onDismiss = {
+            showDiscoverySheet = false
+            discoveryOpenedAtStartup = false
+        })
     }
 
     if (showQrPairing) {
