@@ -435,6 +435,25 @@ fun ScrcpyScreen(
         session.start(holder)
     }
 
+    // "Auto-start mirroring" (Settings > Scrcpy): MainActivity sets the request when a device
+    // (re)connects. Same as pressing Start: with video the player opens and its surface starts the
+    // session; audio-only starts right away.
+    LaunchedEffect(scrcpyVm.autoStartRequested, isDeviceConnected, isModeSupported) {
+        if (!scrcpyVm.autoStartRequested || !isDeviceConnected || !isModeSupported) return@LaunchedEffect
+        kotlinx.coroutines.delay(400) // let the device's saved settings finish loading
+        if (!scrcpyVm.autoStartRequested || scrcpyVm.isMirroring) {
+            scrcpyVm.autoStartRequested = false
+            return@LaunchedEffect
+        }
+        scrcpyVm.autoStartRequested = false
+        scrcpyVm.errorMessage = null
+        if (rememberSettings && deviceKey != null) {
+            ScrcpyConfigStore.save(context, deviceKey, config)
+        }
+        scrcpyVm.isMirroring = true
+        if (!config.videoEnabled) startMirroring(null)
+    }
+
     fun toggleRecording() {
         val session = activeSession ?: return
         if (isRecording) {
@@ -2328,6 +2347,35 @@ private fun AudioSettings(
                 color = MaterialTheme.colorScheme.error
             )
         }
+
+        // Client-side playback buffer, like scrcpy's --audio-buffer.
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.label_audio_buffer), style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(0, 20, 50, 100, 200, 500).forEach { ms ->
+                FilterChip(
+                    selected = config.audioBufferMs == ms,
+                    onClick = { onConfigChange(config.copy(audioBufferMs = ms)) },
+                    enabled = !isMirroring,
+                    label = {
+                        Text(
+                            if (ms == 50) stringResource(R.string.audio_buffer_default_ms, ms) else "$ms ms",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = stringResource(R.string.audio_buffer_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         if (config.audioCodec == "opus" || config.audioCodec == "aac") {
             Spacer(Modifier.height(8.dp))

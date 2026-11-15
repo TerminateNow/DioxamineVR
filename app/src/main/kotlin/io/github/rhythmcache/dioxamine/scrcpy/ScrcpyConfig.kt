@@ -35,6 +35,7 @@ data class ScrcpyConfig(
     val videoCodec: String = "h264",      // h264, h265, av1, vp8, vp9
     val audioCodec: String = "opus",      // opus, aac, flac, raw
     val audioBitRateKbps: Int = 128,      // 64, 128, 192, 256, 320 Kbps
+    val audioBufferMs: Int = 50,          // client playback buffer (scrcpy --audio-buffer), not sent to the server
     val captureOrientation: String? = null, // 0, 90, 180, 270, flip0, flip90, flip180, flip270
     val crop: String? = null, // "width:height:x:y" in device pixels, display source only (null = full screen)
     val angle: String? = null // rotation in degrees, e.g. "-22" or "12.5", display source only (null = no rotation)
@@ -195,6 +196,7 @@ data class ScrcpyConfig(
         json.put("videoCodec", videoCodec)
         json.put("audioCodec", audioCodec)
         json.put("audioBitRateKbps", audioBitRateKbps)
+        json.put("audioBufferMs", audioBufferMs)
         captureOrientation?.let { json.put("captureOrientation", it) }
         crop?.let { json.put("crop", it) }
         angle?.let { json.put("angle", it) }
@@ -257,6 +259,7 @@ data class ScrcpyConfig(
                     videoCodec = json.optString("videoCodec", "h264"),
                     audioCodec = json.optString("audioCodec", "opus"),
                     audioBitRateKbps = json.optInt("audioBitRateKbps", 128),
+                    audioBufferMs = json.optInt("audioBufferMs", 50),
                     captureOrientation = json.optString("captureOrientation").takeIf { it.isNotEmpty() && it != "null" },
                     crop = json.optString("crop").takeIf { it.isNotEmpty() && it != "null" },
                     angle = json.optString("angle").takeIf { it.isNotEmpty() && it != "null" }

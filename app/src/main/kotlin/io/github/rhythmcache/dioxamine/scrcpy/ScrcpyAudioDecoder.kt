@@ -18,11 +18,31 @@ import java.util.concurrent.CancellationException
  * Supported audio codecs: Opus, AAC, FLAC, and RAW (uncompressed PCM).
  * Uses reusable buffers and direct ByteBuffer writes to remove GC allocations.
  */
-class ScrcpyAudioDecoder {
+/**
+ * @param bufferMs client-side playback buffer, like scrcpy's `--audio-buffer` (default 50 ms):
+ * playback starts once this much audio is queued, absorbing network jitter at the cost of delay.
+ * 0 starts playback immediately.
+ */
+class ScrcpyAudioDecoder(private val bufferMs: Int = 50) {
     private var codec: MediaCodec? = null
     private var audioTrack: AudioTrack? = null
     private var currentSampleRate = 0
     private var currentChannelCount = 0
+
+    // Jitter buffer: bytes queued since the track was (re)created, and the amount to queue
+    // before starting playback.
+    private var targetBufferBytes = 0
+    private var queuedBytes = 0L
+    private var playing = false
+
+    private fun onPcmWritten(written: Int) {
+        if (written <= 0 || playing) return
+        queuedBytes += written
+        if (queuedBytes >= targetBufferBytes) {
+            audioTrack?.play()
+            playing = true
+        }
+    }
 
     // Preallocated buffers to prevent GC allocation churn
     private val headerBuffer = ByteArray(12)
@@ -209,7 +229,7 @@ class ScrcpyAudioDecoder {
                 ScrcpyStreamStats.audioBytes.addAndGet(payloadSize + 12L)
 
                 if (isRaw) {
-                    audioTrack?.write(payloadBuffer, 0, payloadSize)
+                    onPcmWritten(audioTrack?.write(payloadBuffer, 0, payloadSize) ?: 0)
                 } else {
                     val isConfigPacket = (ptsAndFlags and PACKET_FLAG_CONFIG) != 0L
                     val flags = if (isConfigPacket) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
@@ -238,7 +258,7 @@ class ScrcpyAudioDecoder {
                                 val outputBuffer = mc.getOutputBuffer(outIndex)
                                 if (outputBuffer != null && bufferInfo.size > 0) {
                                     // Use direct ByteBuffer write to avoid array allocation
-                                    audioTrack?.write(outputBuffer, bufferInfo.size, AudioTrack.WRITE_BLOCKING)
+                                    onPcmWritten(audioTrack?.write(outputBuffer, bufferInfo.size, AudioTrack.WRITE_BLOCKING) ?: 0)
                                 }
                                 runCatching { mc.releaseOutputBuffer(outIndex, false) }
                                 outIndex = mc.dequeueOutputBuffer(bufferInfo, 0)
@@ -278,6 +298,8 @@ class ScrcpyAudioDecoder {
         } catch (_: Exception) {}
 
         val channelMask = if (channelCount == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+        // 16-bit PCM: 2 bytes per sample per channel.
+        val targetBytes = (sampleRate.toLong() * channelCount * 2 * bufferMs.coerceIn(0, 1000) / 1000).toInt()
         val minBufferSize = AudioTrack.getMinBufferSize(
             sampleRate,
             channelMask,
@@ -298,13 +320,19 @@ class ScrcpyAudioDecoder {
                     .setChannelMask(channelMask)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBufferSize, 16384))
+            .setBufferSizeInBytes(maxOf(minBufferSize, 16384, targetBytes * 2))
             .build()
 
-        audioTrack?.play()
+        targetBufferBytes = targetBytes
+        queuedBytes = 0L
+        playing = false
+        if (targetBytes == 0) {
+            audioTrack?.play()
+            playing = true
+        }
         currentSampleRate = sampleRate
         currentChannelCount = channelCount
-        AppLogger.i(TAG, "ScrcpyAudioDecoder: Rebuilt AudioTrack for ${sampleRate}Hz, ${channelCount}ch")
+        AppLogger.i(TAG, "ScrcpyAudioDecoder: Rebuilt AudioTrack for ${sampleRate}Hz, ${channelCount}ch, buffer ${bufferMs}ms")
     }
 
     fun stop() {

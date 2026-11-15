@@ -183,4 +183,12 @@ class ScrcpyConfigTest {
         assertEquals("-22", restored.angle)
         assertNull(ScrcpyConfig.fromJson(ScrcpyConfig().toJson()).angle)
     }
+
+    @Test
+    fun testAudioBuffer_clientOnlyAndSurvivesJsonRoundTrip() {
+        val config = ScrcpyConfig(audioEnabled = true, audioBufferMs = 200)
+        assertFalse(config.toServerArgs().contains("buffer"))
+        assertEquals(200, ScrcpyConfig.fromJson(config.toJson()).audioBufferMs)
+        assertEquals(50, ScrcpyConfig.fromJson("{}").audioBufferMs)
+    }
 }

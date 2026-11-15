@@ -195,7 +195,7 @@ class ScrcpySession(
                 val currentAudioStream = audioStream
                 if (config.audioEnabled && currentAudioStream != null) {
                     audioJob = launch {
-                        val decoder = ScrcpyAudioDecoder()
+                        val decoder = ScrcpyAudioDecoder(config.audioBufferMs)
                         audioDecoder = decoder
                         decoder.decodeAudioStream(currentAudioStream)
                     }

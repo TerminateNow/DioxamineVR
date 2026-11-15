@@ -79,6 +79,8 @@ class HelperActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshTick++
+        // Make sure the watchdog service is running if either of its switches is on.
+        WirelessWatchdogService.sync(this)
     }
 }
 
@@ -203,6 +205,10 @@ private fun HelperScreen(refreshTick: Int, onRefresh: () -> Unit, onOpenQuestSet
                 }
                 Switch(checked = status.wirelessEnabled, enabled = canUse, onCheckedChange = null)
             }
+            // Keep Wireless debugging on while the screen is off (watchdog + Wi-Fi lock).
+            WatchdogSettings(enabled = canUse)
+            Spacer(Modifier.height(8.dp))
+
             // Meta Quest specific options live on their own page.
             OutlinedButton(
                 onClick = onOpenQuestSettings,

@@ -538,6 +538,11 @@
     <!-- ADB Reboot Options Strings -->
     <string name="adb_reboot_tile_title">Reboot Options</string>
     <string name="adb_reboot_tile_desc">Reboot to system, bootloader, recovery, fastboot, or power off</string>
+    <string name="label_audio_buffer">Audio buffer</string>
+    <string name="audio_buffer_default_ms">%1$d ms (default)</string>
+    <string name="audio_buffer_hint">Same as scrcpy --audio-buffer. Higher = smoother audio but more delay; lower = less delay but may crackle on a weak connection.</string>
+    <string name="settings_scrcpy_auto_start_title">Auto-start Mirroring</string>
+    <string name="settings_scrcpy_auto_start_subtitle">Open the scrcpy mirror automatically when a device connects, or reconnects after the connection dropped</string>
     <string name="scrcpy_preset_label">Preset: %1$s</string>
     <string name="scrcpy_preset_caption">Default is the standard settings. Quest 3 uses the recommended crop and angle for mirroring a Quest 3 onto a 16:9 screen.</string>
     <string name="scrcpy_preset_save">Save current settings to preset</string>
@@ -558,9 +563,9 @@
     <string name="meta_quest_tile_title">Meta Quest Settings</string>
     <string name="meta_quest_tile_desc">Quest headset options applied over ADB: proximity (light) sensor and guardian boundary</string>
     <string name="meta_quest_sensor_title">Proximity (light) sensor</string>
-    <string name="meta_quest_sensor_desc">On: the display turns off when the headset is taken off. Off: the display stays on as if the headset is worn. Resets to on when the headset reboots (the Wireless Debugging Helper can keep it off).</string>
+    <string name="meta_quest_sensor_desc">On: the display turns off when the headset is taken off. Off: the display stays on as if the headset is worn. The headset resets this on reboot; Dioxamine applies your choice again every time it connects to this headset.</string>
     <string name="meta_quest_guardian_title">Guardian boundary</string>
-    <string name="meta_quest_guardian_desc">Off pauses the guardian (boundary). Resets to on when the headset reboots (the Wireless Debugging Helper can try to keep it off).</string>
+    <string name="meta_quest_guardian_desc">Off pauses the guardian (boundary). The headset resets this on reboot; Dioxamine applies your choice again every time it connects to this headset.</string>
     <string name="meta_quest_guardian_on_toast">Guardian turned on</string>
     <string name="meta_quest_guardian_off_toast">Guardian turned off</string>
     <string name="meta_quest_sensor_on_toast">Proximity sensor turned on</string>

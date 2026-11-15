@@ -44,7 +44,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import io.github.rhythmcache.dioxamine.wirelessdebug.QuestGuardian
 import io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor
 
 /** Meta logo (same drawing as Dioxamine's DioxamineIcons.MetaLogo). */
@@ -73,10 +72,9 @@ val MetaLogoIcon: ImageVector by lazy {
 }
 
 /**
- * Meta Quest Settings page: proximity (light) sensor and guardian boundary. Both are applied from
- * this app on the headset itself and, when set to off, re-applied after every boot by the shared
- * BootReceiver. The Quest may only accept them over ADB; then Dioxamine's Meta Quest Settings
- * (which sends the same commands over ADB) is the way to change them.
+ * Meta Quest Settings page: proximity (light) sensor, applied from this app on the headset and,
+ * when set to off, re-applied after every boot by the shared BootReceiver. The guardian can only be
+ * changed over ADB, so it lives in Dioxamine (which re-applies it on every connect); see the note.
  */
 @Composable
 fun QuestSettingsScreen(onBack: () -> Unit) {
@@ -85,8 +83,6 @@ fun QuestSettingsScreen(onBack: () -> Unit) {
     var proxSensorOn by remember {
         mutableStateOf(!prefs.getBoolean(QuestProximitySensor.PREF_SENSOR_OFF, false))
     }
-    // The guardian property can be read back, so show its real state.
-    var guardianOn by remember { mutableStateOf(QuestGuardian.isGuardianOn(QuestGuardian.readLocal())) }
     val firstFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -143,28 +139,14 @@ fun QuestSettingsScreen(onBack: () -> Unit) {
                                 }
                         }
                     )
-                    SettingSwitchRow(
-                        title = stringResource(R.string.guardian_title),
-                        subtitle = stringResource(R.string.guardian_subtitle),
-                        checked = guardianOn,
-                        onChange = { on ->
-                            QuestGuardian.setLocal(guardianOn = on)
-                                .onSuccess {
-                                    prefs.edit().putBoolean(QuestGuardian.PREF_GUARDIAN_OFF, !on).apply()
-                                    Toast.makeText(
-                                        context,
-                                        if (on) R.string.guardian_on_toast else R.string.guardian_off_toast,
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                                .onFailure {
-                                    Toast.makeText(context, R.string.guardian_needs_adb, Toast.LENGTH_LONG).show()
-                                }
-                            guardianOn = QuestGuardian.isGuardianOn(QuestGuardian.readLocal())
-                        }
-                    )
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.guardian_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

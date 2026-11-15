@@ -110,6 +110,9 @@ fun SettingsScreen(vm: AdbViewModel) {
     var autoRecord by remember {
         mutableStateOf(prefs.getBoolean("scrcpy_auto_record", false))
     }
+    var autoStartMirroring by remember {
+        mutableStateOf(prefs.getBoolean("scrcpy_auto_start", false))
+    }
 
     var themeExpanded by remember { mutableStateOf(false) }
     var scrcpyExpanded by remember { mutableStateOf(false) }
@@ -834,6 +837,44 @@ fun SettingsScreen(vm: AdbViewModel) {
                             Switch(
                                 checked = autoRecord,
                                 interactionSource = switchRowFocus5,
+                                onCheckedChange = null)
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // Auto-start mirroring on connect / reconnect (handled in MainActivity + ScrcpyScreen).
+                        val autoStartRowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        Row(
+                            modifier = Modifier
+                                .toggleable(
+                                    value = autoStartMirroring,
+                                    role = Role.Switch,
+                                    interactionSource = autoStartRowFocus,
+                                    indication = null,
+                                    onValueChange = { checked ->
+                                        autoStartMirroring = checked
+                                        prefs.edit().putBoolean("scrcpy_auto_start", checked).apply()
+                                    }
+                                )
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                Text(
+                                    stringResource(R.string.settings_scrcpy_auto_start_title),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.settings_scrcpy_auto_start_subtitle),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = autoStartMirroring,
+                                interactionSource = autoStartRowFocus,
                                 onCheckedChange = null)
                         }
         }

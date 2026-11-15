@@ -288,6 +288,37 @@ class AdbViewModel(
     }
 
     /**
+     * Re-applies the Meta Quest choices saved for this headset (guardian, proximity sensor) right
+     * after connecting, because the headset resets both on reboot. Does nothing for non-Quest
+     * devices or headsets with nothing saved.
+     */
+    private fun reapplyQuestSettings(id: String) {
+        val ctx = context ?: return
+        val conn = devices[id] ?: return
+        val client = conn.client ?: return
+        val key = conn.uniqueId ?: conn.id
+        val guardian = io.github.rhythmcache.dioxamine.adb.builtin.metaquest.QuestSettingsStore.guardianOn(ctx, key)
+        val sensor = io.github.rhythmcache.dioxamine.adb.builtin.metaquest.QuestSettingsStore.sensorOn(ctx, key)
+        if (guardian == null && sensor == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val manufacturer = client.shell("getprop ro.product.manufacturer").stdoutText
+                if (!io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor.isQuestManufacturer(manufacturer)) return@launch
+                guardian?.let {
+                    val r = client.shell(io.github.rhythmcache.dioxamine.wirelessdebug.QuestGuardian.adbSetCommand(it))
+                    AppLogger.i("ADB_VM", "Re-applied Quest guardian ${if (it) "on" else "off"} (exit ${r.exitCode})")
+                }
+                sensor?.let {
+                    val r = client.shell(io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor.adbCommand(it))
+                    AppLogger.i("ADB_VM", "Re-applied Quest proximity sensor ${if (it) "on" else "off"} (exit ${r.exitCode})")
+                }
+            } catch (e: Exception) {
+                AppLogger.w("ADB_VM", "Re-applying Quest settings failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Only one ADB connection is kept at a time: once [keepId] has connected, every other device
      * (connected, connecting or failed) is disconnected and removed.
      */
@@ -377,6 +408,7 @@ class AdbViewModel(
                         isRoot = details.isRoot
                     )
                     AppLogger.i("ADB_VM", "AdbViewModel: Auto-reconnected $id successfully")
+                    withContext(Dispatchers.Main) { reapplyQuestSettings(id) }
                     if (isTls) rememberWirelessDevice(details.uniqueId)
                 } catch (e: Exception) {
                     devices[id] = conn.copy(client = null, state = ConnectionState.Error("Connection lost: ${e.message}"))
@@ -433,6 +465,7 @@ class AdbViewModel(
                 )
                 activeDeviceId = id
                 disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -476,6 +509,7 @@ class AdbViewModel(
                 )
                 activeDeviceId = id
                 disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, id, DeviceTransport.TCP, null, ConnectionState.Error(e.message ?: "Connection failed"))
             }
@@ -532,6 +566,7 @@ class AdbViewModel(
                 )
                 activeDeviceId = id
                 disconnectOthers(id)
+                reapplyQuestSettings(id)
             } catch (e: Exception) {
                 devices[id] = DeviceConnection(id, defaultLabel, DeviceTransport.USB, null, ConnectionState.Error(e.message ?: "USB connection failed"))
             }
@@ -569,6 +604,7 @@ class AdbViewModel(
                 )
                 activeDeviceId = id
                 disconnectOthers(id)
+                reapplyQuestSettings(id)
                 rememberWirelessDevice(details.uniqueId)
                 onResult?.invoke(true, null)
             } catch (e: io.github.rhythmcache.adb.AdbException.NotPaired) {

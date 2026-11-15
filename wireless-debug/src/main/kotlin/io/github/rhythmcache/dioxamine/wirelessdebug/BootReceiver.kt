@@ -29,8 +29,5 @@ class BootReceiver : BroadcastReceiver() {
         if (prefs.getBoolean(QuestProximitySensor.PREF_SENSOR_OFF, false) && QuestProximitySensor.isQuestDevice) {
             QuestProximitySensor.sendFromApp(context, sensorOn = false)
         }
-        if (prefs.getBoolean(QuestGuardian.PREF_GUARDIAN_OFF, false) && QuestProximitySensor.isQuestDevice) {
-            QuestGuardian.setLocal(guardianOn = false)
-        }
     }
 }

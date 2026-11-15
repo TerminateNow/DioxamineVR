@@ -48,7 +48,8 @@ fun MetaQuestTile(
 }
 
 /**
- * Meta Quest specific settings, applied over ADB to the connected headset.
+ * Meta Quest specific settings, applied over ADB to the connected headset. Choices are stored per
+ * headset in [QuestSettingsStore] and re-applied by AdbViewModel each time it connects.
  * Currently: the proximity ("light") sensor between the lenses and the guardian boundary.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,13 +62,12 @@ fun MetaQuestScreen(
     val scope = rememberCoroutineScope()
     val client = vm.activeClient()
     val conn = vm.activeDeviceId?.let { vm.devices[it] }
-    val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
     // There is no way to read the sensor mode back, so remember what was last sent per headset.
-    val prefKey = "quest_prox_sensor_on_${conn?.uniqueId ?: conn?.id ?: "unknown"}"
+    val deviceKey = conn?.uniqueId ?: conn?.id ?: "unknown"
 
     var deviceLine by remember { mutableStateOf<String?>(null) }
     var isQuest by remember { mutableStateOf(true) }
-    var sensorOn by remember(prefKey) { mutableStateOf(prefs.getBoolean(prefKey, true)) }
+    var sensorOn by remember(deviceKey) { mutableStateOf(QuestSettingsStore.sensorOn(context, deviceKey) ?: true) }
     var busy by remember { mutableStateOf(false) }
     // The guardian property can be read back from the headset, so this shows its real state.
     var guardianOn by remember { mutableStateOf(true) }
@@ -102,7 +102,7 @@ fun MetaQuestScreen(
             val ok = result != null && result.isSuccess && !result.output.contains("Error", ignoreCase = true)
             if (ok) {
                 sensorOn = on
-                prefs.edit().putBoolean(prefKey, on).apply()
+                QuestSettingsStore.setSensorOn(context, deviceKey, on)
             }
             Toast.makeText(
                 context,
@@ -129,6 +129,8 @@ fun MetaQuestScreen(
             guardianBusy = false
             guardianOn = QuestGuardian.isGuardianOn(now)
             val ok = result != null && result.isSuccess && guardianOn == on
+            // Remembered so Dioxamine applies it again on every connect (the headset resets it on reboot).
+            if (ok) QuestSettingsStore.setGuardianOn(context, deviceKey, on)
             Toast.makeText(
                 context,
                 when {

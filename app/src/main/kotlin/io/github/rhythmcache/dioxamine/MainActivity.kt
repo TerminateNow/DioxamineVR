@@ -186,6 +186,22 @@ fun DioxamineApp(keyDir: File) {
     val fastbootVm: FastbootViewModel = viewModel()
     val scrcpyVm: ScrcpyViewModel = viewModel()
 
+    // "Auto-start mirroring" (Settings > Scrcpy): whenever a device becomes connected, including a
+    // reconnect after a dropped connection (Connected -> Connecting/Error -> Connected), open the
+    // scrcpy tab and ask it to start mirroring.
+    val connectedDeviceId = vm.activeDeviceId?.takeIf {
+        vm.devices[it]?.state is io.github.rhythmcache.dioxamine.core.ConnectionState.Connected
+    }
+    LaunchedEffect(connectedDeviceId) {
+        if (connectedDeviceId == null || scrcpyVm.isMirroring) return@LaunchedEffect
+        val autoStart = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getBoolean("scrcpy_auto_start", false)
+        if (autoStart) {
+            selectedTab = Tab.SCRCPY
+            scrcpyVm.autoStartRequested = true
+        }
+    }
+
     val coroutineScope = rememberCoroutineScope()
     val pluginRepo = remember { io.github.rhythmcache.dioxamine.plugin.PluginRepository(context.applicationContext, coroutineScope) }
     val permissionStore = remember { io.github.rhythmcache.dioxamine.plugin.PluginPermissionStore(context.applicationContext) }
