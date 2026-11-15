@@ -29,6 +29,7 @@ import java.io.File
 
 const val PREF_AUTOCONNECT_WIRELESS = "adb_autoconnect_wireless"
 private const val WIRELESS_AUTOCONNECT_WINDOW_MS = 60_000L
+private const val FAVORITE_SCAN_INTERVAL_MS = 3_000L
 
 class AdbViewModel(
     private val keyDir: File,
@@ -143,6 +144,7 @@ class AdbViewModel(
         val newValue = if (host == null || host == favoriteHost) null else host
         FavoriteAdbHost.set(ctx, newValue)
         favoriteHost = newValue
+        if (newValue != null) ensureFavoriteWatch()
     }
 
     /** True while the mDNS watch for the favorite / known wireless devices is running. */
@@ -164,32 +166,22 @@ class AdbViewModel(
         if (wirelessAutoConnectJob?.isActive == true) return
         if (anyDeviceBusy()) return
 
-        val favorite = favoriteHost
-        if (favorite != null && FavoriteAdbHost.isLocalhost(favorite)) {
-            // This device's own adbd isn't advertised over mDNS; probe its local port instead.
-            viewModelScope.launch(Dispatchers.IO) {
-                val target = LocalAdbDetector.detect() ?: return@launch
-                withContext(Dispatchers.Main) {
-                    if (!anyDeviceBusy()) connectTcpDirect("127.0.0.1", target.port)
-                }
-            }
+        // With a favorite, the 3-second favorite scan loop does the work.
+        if (favoriteHost != null) {
+            ensureFavoriteWatch()
             return
         }
 
-        val known: Set<String> = if (favorite == null) {
-            if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
-            KnownWirelessDevices.getAll(ctx).toSet().ifEmpty { return }
-        } else {
-            emptySet()
-        }
+        if (prefs?.getBoolean(PREF_AUTOCONNECT_WIRELESS, true) == false) return
+        val known: Set<String> = KnownWirelessDevices.getAll(ctx).toSet().ifEmpty { return }
         val connector = wirelessAutoConnector ?: return
 
         wirelessAutoConnectAttempted.clear()
         wirelessAutoConnecting = true
-        AppLogger.i("ADB_VM", "Auto-connect: looking for " + (favorite?.let { "favorite $it" } ?: "known devices $known"))
+        AppLogger.i("ADB_VM", "Auto-connect: looking for known devices $known")
         connector.start { service ->
             viewModelScope.launch(Dispatchers.Main) {
-                onAutoConnectServiceFound(favorite, known, service)
+                onAutoConnectServiceFound(null, known, service)
             }
         }
         wirelessAutoConnectJob = viewModelScope.launch(Dispatchers.Main) {
@@ -208,6 +200,69 @@ class AdbViewModel(
         }
     }
 
+    // -- Favorite scan loop ------------------------------------------------------------------
+    // While a favorite is starred, the app is in the foreground and no device is connected or
+    // connecting (none yet, or the current one dropped), scan for the favorite IP every
+    // FAVORITE_SCAN_INTERVAL_MS and connect to it as soon as it shows up.
+
+    private var appInForeground = true
+    private var favoriteWatchJob: Job? = null
+    private val favoriteConnector by lazy { context?.let { WirelessAutoConnector(it) } }
+
+    fun onAppForeground() {
+        appInForeground = true
+        startWirelessAutoConnect()
+    }
+
+    fun onAppBackground() {
+        appInForeground = false
+    }
+
+    private fun ensureFavoriteWatch() {
+        if (favoriteWatchJob?.isActive == true || favoriteHost == null) return
+        favoriteWatchJob = viewModelScope.launch(Dispatchers.Main) {
+            try {
+                while (isActive) {
+                    val fav = favoriteHost ?: break
+                    if (appInForeground && !anyDeviceBusy()) {
+                        wirelessAutoConnecting = true
+                        scanForFavorite(fav)
+                    } else {
+                        favoriteConnector?.stop()
+                        wirelessAutoConnecting = false
+                    }
+                    kotlinx.coroutines.delay(FAVORITE_SCAN_INTERVAL_MS)
+                }
+            } finally {
+                favoriteConnector?.stop()
+                wirelessAutoConnecting = false
+            }
+        }
+    }
+
+    private fun scanForFavorite(fav: String) {
+        if (FavoriteAdbHost.isLocalhost(fav)) {
+            // This device's own adbd isn't advertised over mDNS; probe its local port instead.
+            viewModelScope.launch(Dispatchers.IO) {
+                val target = LocalAdbDetector.detect() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!anyDeviceBusy() && favoriteHost == fav) connectTcpDirect("127.0.0.1", target.port)
+                }
+            }
+            return
+        }
+        val connector = favoriteConnector ?: return
+        // A fresh mDNS discovery each round: a service is only reported once per discovery
+        // session, so restarting lets a device that appeared (or failed to connect) be seen again.
+        connector.stop()
+        wirelessAutoConnectAttempted.clear()
+        connector.start { service ->
+            viewModelScope.launch(Dispatchers.Main) {
+                onAutoConnectServiceFound(fav, emptySet(), service)
+            }
+        }
+    }
+
     private fun onAutoConnectServiceFound(
         favorite: String?,
         known: Set<String>,
@@ -216,7 +271,7 @@ class AdbViewModel(
         if (anyDeviceBusy()) return
         val host: String
         if (favorite != null) {
-            if (favorite !in service.hosts) return
+            if (favorite != favoriteHost || favorite !in service.hosts) return
             host = favorite
         } else {
             if (service.type != AdbServiceType.TLS_CONNECT || service.deviceId !in known) return
@@ -248,6 +303,7 @@ class AdbViewModel(
     override fun onCleared() {
         super.onCleared()
         wirelessAutoConnector?.stop()
+        favoriteConnector?.stop()
     }
 
     fun triggerLocalAdbCheck() {

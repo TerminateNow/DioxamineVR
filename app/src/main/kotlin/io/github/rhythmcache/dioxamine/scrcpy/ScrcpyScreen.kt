@@ -825,6 +825,21 @@ fun ScrcpyScreen(
                             .verticalScroll(scrollState)
                             .padding(16.dp)
                     ) {
+                        // Presets: pick / load / save / delete / add named settings.
+                        ScrcpyPresetBar(
+                            currentConfig = config,
+                            isMirroring = isMirroring,
+                            onLoad = { preset ->
+                                config = preset
+                                scrcpyVm.showFloatingNav = preset.showFloatingNav
+                                scrcpyVm.showTouchpadOverlay = preset.showTouchpad
+                                scrcpyVm.showKeyboard = preset.showKeyboard
+                                if (rememberSettings && deviceKey != null) {
+                                    ScrcpyConfigStore.save(context, deviceKey, preset)
+                                }
+                            },
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 VideoSettings(

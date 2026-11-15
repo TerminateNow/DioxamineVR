@@ -10,6 +10,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fence
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,6 +27,7 @@ import io.github.rhythmcache.dioxamine.adb.builtin.AdbActionTile
 import io.github.rhythmcache.dioxamine.core.executeShell
 import io.github.rhythmcache.dioxamine.core.executeShellResult
 import io.github.rhythmcache.dioxamine.ui.icons.DioxamineIcons
+import io.github.rhythmcache.dioxamine.wirelessdebug.QuestGuardian
 import io.github.rhythmcache.dioxamine.wirelessdebug.QuestProximitySensor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -47,7 +49,7 @@ fun MetaQuestTile(
 
 /**
  * Meta Quest specific settings, applied over ADB to the connected headset.
- * Currently: the proximity ("light") sensor between the lenses.
+ * Currently: the proximity ("light") sensor between the lenses and the guardian boundary.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,6 +69,9 @@ fun MetaQuestScreen(
     var isQuest by remember { mutableStateOf(true) }
     var sensorOn by remember(prefKey) { mutableStateOf(prefs.getBoolean(prefKey, true)) }
     var busy by remember { mutableStateOf(false) }
+    // The guardian property can be read back from the headset, so this shows its real state.
+    var guardianOn by remember { mutableStateOf(true) }
+    var guardianBusy by remember { mutableStateOf(false) }
 
     LaunchedEffect(client) {
         val c = client ?: return@LaunchedEffect
@@ -79,6 +84,10 @@ fun MetaQuestScreen(
         val lines = out?.lines()?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
         isQuest = QuestProximitySensor.isQuestManufacturer(lines.getOrNull(0))
         deviceLine = lines.joinToString(" ").ifBlank { null }
+        val guardianProp = withContext(Dispatchers.IO) {
+            runCatching { c.executeShell(QuestGuardian.ADB_GET_COMMAND, supportsV2) }.getOrNull()
+        }
+        guardianOn = QuestGuardian.isGuardianOn(guardianProp)
     }
 
     fun setSensor(on: Boolean) {
@@ -101,6 +110,31 @@ fun MetaQuestScreen(
                     !ok -> context.getString(R.string.meta_quest_command_failed, result?.output ?: "")
                     on -> context.getString(R.string.meta_quest_sensor_on_toast)
                     else -> context.getString(R.string.meta_quest_sensor_off_toast)
+                },
+                if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    fun setGuardian(on: Boolean) {
+        val c = client ?: return
+        val supportsV2 = conn?.supportsShellV2 ?: true
+        guardianBusy = true
+        scope.launch {
+            val (result, now) = withContext(Dispatchers.IO) {
+                val r = runCatching { c.executeShellResult(QuestGuardian.adbSetCommand(on), supportsV2) }.getOrNull()
+                val read = runCatching { c.executeShell(QuestGuardian.ADB_GET_COMMAND, supportsV2) }.getOrNull()
+                r to read
+            }
+            guardianBusy = false
+            guardianOn = QuestGuardian.isGuardianOn(now)
+            val ok = result != null && result.isSuccess && guardianOn == on
+            Toast.makeText(
+                context,
+                when {
+                    !ok -> context.getString(R.string.meta_quest_command_failed, result?.output ?: "")
+                    on -> context.getString(R.string.meta_quest_guardian_on_toast)
+                    else -> context.getString(R.string.meta_quest_guardian_off_toast)
                 },
                 if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
             ).show()
@@ -157,52 +191,69 @@ fun MetaQuestScreen(
             }
 
             Card(modifier = Modifier.fillMaxWidth()) {
-                // Row is the D-pad stop; its focus shows as an oval ring on the switch only.
-                val rowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                Row(
-                    modifier = Modifier
-                        .toggleable(
-                            value = sensorOn,
-                            enabled = !busy,
-                            role = Role.Switch,
-                            interactionSource = rowFocus,
-                            indication = null,
-                            onValueChange = { setSensor(it) }
-                        )
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.LightMode,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                        Text(
-                            stringResource(R.string.meta_quest_sensor_title),
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            stringResource(R.string.meta_quest_sensor_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (busy) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Switch(
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    QuestSwitchRow(
+                        icon = Icons.Filled.LightMode,
+                        title = stringResource(R.string.meta_quest_sensor_title),
+                        description = stringResource(R.string.meta_quest_sensor_desc),
                         checked = sensorOn,
-                        enabled = !busy,
-                        interactionSource = rowFocus,
-                        onCheckedChange = null
+                        busy = busy,
+                        onChange = { setSensor(it) }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    QuestSwitchRow(
+                        icon = Icons.Filled.Fence,
+                        title = stringResource(R.string.meta_quest_guardian_title),
+                        description = stringResource(R.string.meta_quest_guardian_desc),
+                        checked = guardianOn,
+                        busy = guardianBusy,
+                        onChange = { setGuardian(it) }
                     )
                 }
             }
         }
+    }
+}
+
+/** One settings row: the whole row is the D-pad stop; focus shows as the oval ring on the switch. */
+@Composable
+private fun QuestSwitchRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    description: String,
+    checked: Boolean,
+    busy: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    val rowFocus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Row(
+        modifier = Modifier
+            .toggleable(
+                value = checked,
+                enabled = !busy,
+                role = Role.Switch,
+                interactionSource = rowFocus,
+                indication = null,
+                onValueChange = onChange
+            )
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        Switch(checked = checked, enabled = !busy, interactionSource = rowFocus, onCheckedChange = null)
     }
 }

@@ -174,7 +174,11 @@ fun DioxamineApp(keyDir: File) {
         }
         val lifecycle = (ctx as? androidx.lifecycle.LifecycleOwner)?.lifecycle
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) vm.startWirelessAutoConnect()
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> vm.onAppForeground()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> vm.onAppBackground()
+                else -> Unit
+            }
         }
         lifecycle?.addObserver(observer)
         onDispose { lifecycle?.removeObserver(observer) }
