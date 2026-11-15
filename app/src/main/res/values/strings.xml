@@ -326,6 +326,9 @@
     <string name="discovery_favorite_label">Favorite: %1$s (auto-connects on launch)</string>
     <string name="discovery_cd_favorite">Make favorite (auto-connect on launch)</string>
     <string name="discovery_cd_unfavorite">Remove favorite</string>
+    <string name="device_info_copy_hint">Hold Select on a section to copy it</string>
+    <string name="device_info_copy">Copy</string>
+    <string name="device_info_copied">%1$s copied to clipboard</string>
     <string name="settings_adb_autoconnect_wireless_title">Auto-connect to Known Wireless Devices</string>
     <string name="settings_adb_autoconnect_wireless_subtitle">When the app opens and no favorite is starred in Discover Devices, find devices you have connected to over Wireless debugging on their new port and reconnect automatically</string>
     <string name="settings_wireless_on_boot_title">Enable Wireless Debugging on Boot</string>
@@ -537,6 +540,14 @@
     <string name="adb_reboot_tile_desc">Reboot to system, bootloader, recovery, fastboot, or power off</string>
     <string name="wireless_helper_tile_title">Install Wireless Debugging Helper</string>
     <string name="wireless_helper_tile_desc">One tap: installs the helper on the connected device, grants its permission and opens it, so Wireless debugging turns on at every boot (Android 11+)</string>
+    <string name="wireless_helper_tile_title_update">Update Wireless Debugging Helper</string>
+    <string name="wireless_helper_tile_title_installed">Wireless Debugging Helper</string>
+    <string name="wireless_helper_status_checking">Checking the connected device…</string>
+    <string name="wireless_helper_status_unsupported">Needs Android 11 or newer on the connected device</string>
+    <string name="wireless_helper_status_not_bundled">This build does not include the helper app</string>
+    <string name="wireless_helper_status_not_installed">Not installed on this device. Tap to install (v%1$d), grant its permission and open it</string>
+    <string name="wireless_helper_status_update">Installed v%1$d, update to v%2$d available. Tap to update</string>
+    <string name="wireless_helper_status_up_to_date">Installed and up to date (v%1$d). Tap to re-grant its permission and open it</string>
     <string name="wireless_helper_step_installing">Installing helper app…</string>
     <string name="wireless_helper_step_granting">Granting WRITE_SECURE_SETTINGS…</string>
     <string name="wireless_helper_step_launching">Opening the helper on the device…</string>

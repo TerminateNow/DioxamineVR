@@ -771,6 +771,72 @@ class AdbViewModel(
 
     private var helperInstallJob: Job? = null
 
+    var helperStatus by mutableStateOf<HelperAppStatus>(HelperAppStatus.Unknown)
+        private set
+    private var bundledHelperVersion: Long? = null
+    private var helperStatusJob: Job? = null
+
+    /** versionCode of the helper APK bundled in assets (read once), or null if not bundled. */
+    private fun readBundledHelperVersion(appContext: Context): Long? {
+        bundledHelperVersion?.let { return it }
+        val probe = File(appContext.cacheDir, "helper-version-probe.apk")
+        return try {
+            appContext.assets.open(WirelessDebugging.HELPER_ASSET).use { input ->
+                probe.outputStream().use { input.copyTo(it) }
+            }
+            @Suppress("DEPRECATION")
+            val info = appContext.packageManager.getPackageArchiveInfo(probe.absolutePath, 0) ?: return null
+            val version = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            bundledHelperVersion = version
+            version
+        } catch (e: java.io.FileNotFoundException) {
+            null
+        } finally {
+            probe.delete()
+        }
+    }
+
+    /** Checks whether the helper is installed on the active device and whether it's outdated. */
+    fun refreshHelperStatus(context: Context) {
+        val client = activeClient()
+        if (client == null) {
+            helperStatus = HelperAppStatus.Unknown
+            return
+        }
+        val apiLevel = activeDeviceId?.let { devices[it]?.apiLevel }
+        if (apiLevel != null && apiLevel < 30) {
+            helperStatus = HelperAppStatus.Unsupported
+            return
+        }
+        val appContext = context.applicationContext
+        helperStatusJob?.cancel()
+        helperStatus = HelperAppStatus.Checking
+        helperStatusJob = viewModelScope.launch(Dispatchers.IO) {
+            val status = try {
+                val bundled = readBundledHelperVersion(appContext)
+                if (bundled == null) {
+                    HelperAppStatus.NotBundled
+                } else {
+                    val out = client.shell(
+                        "dumpsys package ${WirelessDebugging.HELPER_PACKAGE} | grep -m1 versionCode="
+                    ).stdoutText
+                    val installed = Regex("versionCode=(\\d+)").find(out)?.groupValues?.get(1)?.toLongOrNull()
+                    when {
+                        installed == null -> HelperAppStatus.NotInstalled(bundled)
+                        installed < bundled -> HelperAppStatus.UpdateAvailable(installed, bundled)
+                        else -> HelperAppStatus.UpToDate(installed)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.w("ADB_VM", "Helper status check failed: ${e.message}")
+                HelperAppStatus.Unknown
+            }
+            withContext(Dispatchers.Main) { helperStatus = status }
+        }
+    }
+
     /**
      * One-tap setup of the headset helper on the active device: installs the helper APK bundled in
      * this app's assets, grants it WRITE_SECURE_SETTINGS, and launches it once (Android only delivers
@@ -797,6 +863,8 @@ class AdbViewModel(
                 withContext(Dispatchers.Main) {
                     helperInstallState = HelperInstallState.Running(HelperInstallStep.INSTALLING, 0f)
                 }
+                val alreadyCurrent = helperStatus is HelperAppStatus.UpToDate
+                if (!alreadyCurrent) {
                 appContext.assets.open(WirelessDebugging.HELPER_ASSET).use { input ->
                     apk.outputStream().use { input.copyTo(it) }
                 }
@@ -821,6 +889,7 @@ class AdbViewModel(
                     client.shell("pm uninstall ${WirelessDebugging.HELPER_PACKAGE}")
                     installApk()
                 }
+                } // !alreadyCurrent: an up-to-date helper only needs the grant + launch below
 
                 withContext(Dispatchers.Main) {
                     helperInstallState = HelperInstallState.Running(HelperInstallStep.GRANTING, 1f)
@@ -847,6 +916,7 @@ class AdbViewModel(
 
                 withContext(Dispatchers.Main) {
                     helperInstallState = HelperInstallState.Success(launched)
+                    refreshHelperStatus(appContext)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

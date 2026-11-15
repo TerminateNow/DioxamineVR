@@ -16,6 +16,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -72,6 +75,10 @@ fun ProcessManagerScreen(
     var sortDropdownExpanded by remember { mutableStateOf(false) }
 
     val autoRefreshEnabled = true
+    // TV / VR / landscape tablets: short, wide screens. Use a denser layout there so more
+    // processes fit: stats side by side, search + filters on one row, compact rows in a grid.
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val compact = configuration.screenWidthDp > configuration.screenHeightDp && configuration.screenHeightDp < 600
     var statsExpanded by remember { mutableStateOf(true) }
     val iconCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
 
@@ -261,18 +268,17 @@ fun ProcessManagerScreen(
             // System Memory & CPU Usage Cards (Collapsible)
             AnimatedVisibility(visible = statsExpanded && memoryStats != null) {
                 memoryStats?.let { mem ->
-                    Column {
-                        Spacer(Modifier.height(6.dp))
-
+                    @Composable
+                    fun RamCard(cardModifier: Modifier) {
                         // System Memory Hero Card
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = cardModifier,
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             )
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
+                            Column(modifier = Modifier.padding(if (compact) 10.dp else 14.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -305,17 +311,18 @@ fun ProcessManagerScreen(
                                 )
                             }
                         }
-                        Spacer(Modifier.height(10.dp))
-
+                    }
+                    @Composable
+                    fun CpuCard(cardModifier: Modifier) {
                         // CPU Usage Card
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = cardModifier,
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             )
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
+                            Column(modifier = Modifier.padding(if (compact) 10.dp else 14.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -349,7 +356,21 @@ fun ProcessManagerScreen(
                                 )
                             }
                         }
-                        Spacer(Modifier.height(10.dp))
+                    }
+                    Column {
+                        Spacer(Modifier.height(if (compact) 4.dp else 6.dp))
+                        if (compact) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                RamCard(Modifier.weight(1f))
+                                CpuCard(Modifier.weight(1f))
+                            }
+                            Spacer(Modifier.height(6.dp))
+                        } else {
+                            RamCard(Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(10.dp))
+                            CpuCard(Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(10.dp))
+                        }
                     }
                 }
             }
@@ -358,11 +379,13 @@ fun ProcessManagerScreen(
                 Spacer(Modifier.height(6.dp))
             }
 
+            @Composable
+            fun SearchField(fieldModifier: Modifier) {
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = fieldModifier,
                 placeholder = { Text(stringResource(R.string.proc_manager_search_placeholder)) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = {
@@ -376,11 +399,13 @@ fun ProcessManagerScreen(
                 shape = RoundedCornerShape(12.dp)
             )
 
-            Spacer(Modifier.height(8.dp))
+            }
 
+            @Composable
+            fun FiltersRow(rowModifier: Modifier) {
             // Filter Chips and Sort Menu
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = rowModifier,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -466,6 +491,21 @@ fun ProcessManagerScreen(
                 }
             }
 
+            }
+
+            if (compact) {
+                // One row on wide/short screens: search field + filter chips + sort.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SearchField(Modifier.width(260.dp))
+                    Spacer(Modifier.width(8.dp))
+                    FiltersRow(Modifier.weight(1f))
+                }
+            } else {
+                SearchField(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                FiltersRow(Modifier.fillMaxWidth())
+            }
+
             Spacer(Modifier.height(6.dp))
 
             // Main List View
@@ -526,21 +566,45 @@ fun ProcessManagerScreen(
                     )
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 24.dp)
-                ) {
-                    items(
-                        items = filteredAndSortedProcesses,
-                        key = { it.pid }
-                    ) { item ->
-                        ProcessItemCard(
-                            item = item,
-                            icon = if (item.packageName.isNotBlank()) iconCache[item.packageName] else null,
-                            onForceStop = { targetAppForForceStop = item },
-                            onKill = { targetProcessForKill = item }
-                        )
+                if (compact) {
+                    // Several compact columns on a TV screen so many more processes are visible.
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 340.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        gridItems(
+                            items = filteredAndSortedProcesses,
+                            key = { it.pid }
+                        ) { item ->
+                            ProcessItemCard(
+                                item = item,
+                                icon = if (item.packageName.isNotBlank()) iconCache[item.packageName] else null,
+                                onForceStop = { targetAppForForceStop = item },
+                                onKill = { targetProcessForKill = item },
+                                compact = true
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        items(
+                            items = filteredAndSortedProcesses,
+                            key = { it.pid }
+                        ) { item ->
+                            ProcessItemCard(
+                                item = item,
+                                icon = if (item.packageName.isNotBlank()) iconCache[item.packageName] else null,
+                                onForceStop = { targetAppForForceStop = item },
+                                onKill = { targetProcessForKill = item }
+                            )
+                        }
                     }
                 }
             }
@@ -653,22 +717,23 @@ private fun ProcessItemCard(
     item: ProcessItem,
     icon: ImageBitmap?,
     onForceStop: () -> Unit,
-    onKill: () -> Unit
+    onKill: () -> Unit,
+    compact: Boolean = false
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(if (compact) 10.dp else 12.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 4.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Icon
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(if (compact) 30.dp else 40.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -696,7 +761,7 @@ private fun ProcessItemCard(
                 }
             }
 
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(if (compact) 8.dp else 12.dp))
 
             // Main Info
             Column(modifier = Modifier.weight(1f)) {
@@ -707,7 +772,7 @@ private fun ProcessItemCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (item.processName != item.displayName) {
+                if (!compact && item.processName != item.displayName) {
                     Text(
                         text = item.processName,
                         style = MaterialTheme.typography.labelSmall,
@@ -718,7 +783,7 @@ private fun ProcessItemCard(
                     )
                 }
 
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(if (compact) 1.dp else 4.dp))
 
                 // Badges & Metrics Row
                 Row(

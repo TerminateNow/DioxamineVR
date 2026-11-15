@@ -75,6 +75,9 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
                     }
                 }
                 item {
+                    WirelessHelperTile(vm = vm, isConnected = isConnected)
+                }
+                item {
                     DeviceInformationTile(
                         vm = vm,
                         isConnected = isConnected,
@@ -134,9 +137,6 @@ fun BuiltInActionsTab(vm: AdbViewModel) {
                         isConnected = isConnected,
                         onClick = { activeSubScreen = BuiltInSubScreen.Reboot }
                     )
-                }
-                item {
-                    WirelessHelperTile(vm = vm, isConnected = isConnected)
                 }
             }
         }

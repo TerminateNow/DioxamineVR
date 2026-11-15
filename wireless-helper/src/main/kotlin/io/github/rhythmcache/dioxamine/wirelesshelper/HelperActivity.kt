@@ -19,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -154,25 +153,48 @@ private fun HelperScreen(refreshTick: Int, onRefresh: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    enabled = canUse,
-                    onClick = {
-                        WirelessDebugging.enable(context)
-                            .onSuccess {
-                                Toast.makeText(context, R.string.enabled_toast, Toast.LENGTH_SHORT).show()
-                            }
-                            .onFailure {
-                                Toast.makeText(context, it.message ?: it.toString(), Toast.LENGTH_LONG).show()
-                            }
-                        status = readStatus(context)
-                    },
-                ) { Text(stringResource(R.string.enable_now)) }
-                OutlinedButton(
-                    modifier = Modifier.focusRequester(refreshFocus),
-                    onClick = onRefresh,
-                ) { Text(stringResource(R.string.refresh)) }
+            // Wireless debugging on/off right now (the switch above only controls boot).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = status.wirelessEnabled,
+                        enabled = canUse,
+                        role = Role.Switch,
+                        onValueChange = { on ->
+                            WirelessDebugging.setEnabled(context, on)
+                                .onSuccess {
+                                    Toast.makeText(
+                                        context,
+                                        if (on) R.string.enabled_toast else R.string.disabled_toast,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                .onFailure {
+                                    Toast.makeText(context, it.message ?: it.toString(), Toast.LENGTH_LONG).show()
+                                }
+                            status = readStatus(context)
+                        },
+                    )
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text(stringResource(R.string.wireless_now_title), fontWeight = FontWeight.Medium)
+                    Text(
+                        stringResource(R.string.wireless_now_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = status.wirelessEnabled, enabled = canUse, onCheckedChange = null)
             }
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                modifier = Modifier.focusRequester(refreshFocus),
+                onClick = onRefresh,
+            ) { Text(stringResource(R.string.refresh)) }
 
             if (status.supported && !status.permissionGranted) {
                 Spacer(Modifier.height(24.dp))

@@ -39,6 +39,28 @@ object WirelessDebugging {
     fun isEnabled(context: Context): Boolean =
         Settings.Global.getInt(context.contentResolver, SETTING_ADB_WIFI_ENABLED, 0) == 1
 
+    /** Turns Wireless debugging on or off. See [enable] / [disable]. */
+    fun setEnabled(context: Context, on: Boolean): Result<Unit> =
+        if (on) enable(context) else disable(context)
+
+    /** Turns Wireless debugging off (USB debugging is left as it is). Never throws. */
+    fun disable(context: Context): Result<Unit> {
+        if (!isSupported) {
+            return Result.failure(UnsupportedOperationException("Wireless debugging requires Android 11+"))
+        }
+        if (!hasPermission(context)) {
+            return Result.failure(SecurityException("WRITE_SECURE_SETTINGS is not granted"))
+        }
+        return try {
+            Settings.Global.putInt(context.contentResolver, SETTING_ADB_WIFI_ENABLED, 0)
+            AppLogger.i(TAG, "Wireless debugging disabled")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Failed to disable wireless debugging: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
     /**
      * Enables wireless debugging. Returns a failure with a readable message when the platform or
      * permission does not allow it; never throws.

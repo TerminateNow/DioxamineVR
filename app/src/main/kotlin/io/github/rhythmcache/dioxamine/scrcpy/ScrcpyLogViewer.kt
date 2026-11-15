@@ -2,6 +2,7 @@ package io.github.rhythmcache.dioxamine.scrcpy
 
 import io.github.rhythmcache.dioxamine.ui.tv.FilterChip
 import io.github.rhythmcache.dioxamine.ui.tv.IconButton
+import io.github.rhythmcache.dioxamine.ui.tv.dpadScrollArea
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -226,10 +227,12 @@ fun ScrcpyLogViewer(
                 )
             }
         } else {
+            // D-pad: focus the log, press Select to scroll it with Up/Down; Select or Back to stop.
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
+                    .dpadScrollArea(listState)
                     .background(Color.Black)
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {

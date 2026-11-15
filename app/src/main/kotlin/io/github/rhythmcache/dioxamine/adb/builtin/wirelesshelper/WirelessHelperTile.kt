@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import io.github.rhythmcache.dioxamine.R
 import io.github.rhythmcache.dioxamine.adb.AdbViewModel
 import io.github.rhythmcache.dioxamine.adb.builtin.AdbActionTile
+import io.github.rhythmcache.dioxamine.core.HelperAppStatus
 import io.github.rhythmcache.dioxamine.core.HelperInstallState
 import io.github.rhythmcache.dioxamine.core.HelperInstallStep
 
@@ -30,11 +33,35 @@ import io.github.rhythmcache.dioxamine.core.HelperInstallStep
 fun WirelessHelperTile(vm: AdbViewModel, isConnected: Boolean) {
     val context = LocalContext.current
 
+    // Re-check whenever the connected device changes.
+    LaunchedEffect(vm.activeDeviceId, isConnected) {
+        if (isConnected) vm.refreshHelperStatus(context)
+    }
+
+    val status = vm.helperStatus
+    val title = stringResource(
+        when (status) {
+            is HelperAppStatus.UpdateAvailable -> R.string.wireless_helper_tile_title_update
+            is HelperAppStatus.UpToDate -> R.string.wireless_helper_tile_title_installed
+            else -> R.string.wireless_helper_tile_title
+        }
+    )
+    val description = when (status) {
+        HelperAppStatus.Checking -> stringResource(R.string.wireless_helper_status_checking)
+        HelperAppStatus.Unsupported -> stringResource(R.string.wireless_helper_status_unsupported)
+        HelperAppStatus.NotBundled -> stringResource(R.string.wireless_helper_status_not_bundled)
+        is HelperAppStatus.NotInstalled -> stringResource(R.string.wireless_helper_status_not_installed, status.bundledVersion)
+        is HelperAppStatus.UpdateAvailable ->
+            stringResource(R.string.wireless_helper_status_update, status.installedVersion, status.bundledVersion)
+        is HelperAppStatus.UpToDate -> stringResource(R.string.wireless_helper_status_up_to_date, status.installedVersion)
+        HelperAppStatus.Unknown -> stringResource(R.string.wireless_helper_tile_desc)
+    }
+
     AdbActionTile(
-        title = stringResource(R.string.wireless_helper_tile_title),
-        description = stringResource(R.string.wireless_helper_tile_desc),
-        icon = Icons.Filled.Wifi,
-        enabled = isConnected,
+        title = title,
+        description = description,
+        icon = if (status is HelperAppStatus.UpdateAvailable) Icons.Filled.SystemUpdate else Icons.Filled.Wifi,
+        enabled = isConnected && status != HelperAppStatus.Unsupported && status != HelperAppStatus.NotBundled,
         onClick = { vm.installWirelessHelper(context) }
     )
 
